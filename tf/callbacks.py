@@ -1,32 +1,32 @@
 """
-custom callbacks
-用于训练log\调试\可视化
+custom callbacks for tensorflow keras
+ready for model debug and testing
 """
-import os
 from tensorflow.python.keras.callbacks import Callback
-from dataset_utils.img_proccesing import resize_with_padding_from_dir
 import numpy as np
-import time
-import matplotlib.pyplot as plt
 from tensorflow.python.keras import backend as K
 from tensorflow.python.summary import summary as tf_summary
 import tensorflow as tf
-from dataset_utils.img_proccesing import resize_img_by_keep_ratio
-import random
 
 
-class ImageTensorboard(Callback):
+class IntermediateOutputVisualization(Callback):
+    """
+    将中间层结果可视化到tensorflow当中
+    """
     def __init__(self,
-                 input_data_folder,
+                 x,
                  log_dir,
+                 y=None,
                  interested_layers=None
                  ):
-        super(ImageTensorboard, self).__init__()
-        self.input_data_folder = input_data_folder
+        super(IntermediateOutputVisualization, self).__init__()
+        self.x = x
+        self.y = y
         self.log_dir = log_dir
         self.writer = tf_summary.FileWriter(self.log_dir)
         self.data_pairs = self._read_data_pairs()
-        self.intermediate_model = self._intermediate_model(interested_layers)
+        if interested_layers is not None:
+            self.intermediate_model = self._intermediate_model(interested_layers)
 
     @staticmethod
     def make_image(numpy_img):
@@ -60,33 +60,12 @@ class ImageTensorboard(Callback):
         :param summary_writer:
         :return:
         """
-        middle_img_vis = IntermediateVisualizationTimapAlphaInTensorboard.make_image(numpy_image)
+        middle_img_vis = IntermediateOutputVisualization.make_image(numpy_image)
         summary = tf.compat.v1.Summary(value=[tf.compat.v1.Summary.Value(tag=tag, image=middle_img_vis)])
         self.writer.add_summary(summary, epoch)
         return
 
-    def _read_data_pairs(self):
-        """
-        根据要求读取数据，并预处理成模型输入
-        :return: list of (x, y) pair ready for model input
-        """
-        base_dir = self.input_data_folder
-        data_pair = []
-        # self_input_processing(data_pair_item)
-        return data_pair
-
-    def _output_format(self, x, y, y_pred):
-        """
-        将结果处理成可视化的图，如image还原0-255, mask的一些ndim操作等
-        :param x:
-        :param y:
-        :param y_pred:
-        :return: 一个字典，key为tag, value为图片
-        """
-        output_list = {} # 一个item一张图
-        # key_list = ['image', 'y_gt', 'y_pred']
-        return output_list
-    # TODO:可视化指定曾
+    # TODO:可视化指定层
     def _intermediate_model(self, interested_layers):
         """
         可视化指定输出层和最终输出，否则仅仅可视化最终输出
@@ -110,433 +89,10 @@ class ImageTensorboard(Callback):
         self.writer.flush()
 
 
-class BinaryImageTensorboard(ImageTensorboard):
-    """
-    输出rgb，输出(w,h,2/1)的中间结果可视化
-    """
-    def _read_data_pairs(self):
-        """
-        根据要求读取数据，并预处理成模型输入
-        :return: list of (x, y) pair ready for model input
-        """
-        img_f = os.path.join(self.input_data_folder, 'image')
-        label_f = os.path.join(self.input_data_folder, 'annotation')
-        img_dir_list = [os.path.join(img_f, item) for item in os.listdir(img_f)]
-        ann_dir_list = [os.path.join(label_f, item) for item in os.listdir(label_f)]
-        img_list = [resize_img_by_keep_ratio(item, resize_max=256, as_gray=False, mode='max').astype(np.float32) for item in
-                    img_dir_list]
-        img_list = [item / 127.5 - 1 for item in img_list]
-        img_list = [np.expand_dims(item, axis=0) for item in img_list]
-        ann_list = [resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max').astype(np.float32) for item in ann_dir_list]
-        return list(zip(img_list, ann_list))
-
-    def _output_format(self, x, y, y_pred):
-        """
-        将结果处理成可视化的图，如image还原0-255, mask的一些ndim操作等
-        :param x:
-        :param y:
-        :param y_pred:
-        :return: 一个字典，key为tag, value为图片
-        """
-        # key_list = ['image', 'y_gt', 'y_pred']
-        output_dict = {}
-        output_dict['image'] = np.squeeze(np.uint8((x+1)*127.5))
-        output_dict['y_gt'] = np.squeeze(np.uint8(y/y.max()*255))
-        y_pred = np.squeeze(y_pred)
-        # 当是连个class分类时，仅可视化前景通道
-        if y_pred.shape[-1] == 2:
-            y_pred = y_pred[:, :, -1]
-        output_dict['y_pred'] = np.squeeze(np.uint8(y_pred*255))
-        return output_dict
-
-
-class SeqBinaryImageTensorboard(ImageTensorboard):
-    """
-    输入rgb*5，输出(w,h,2/1)的中间结果可视化
-    """
-    def _read_data_pairs(self):
-        """
-        读取连续五帧数据，及其对应的mask
-        :return:
-        """
-        def _preprocessing(x, y):
-            x = np.stack(x, axis=0)
-            x = np.float32(x)
-            x = x / 127.5 - 1
-            x = np.expand_dims(x, axis=0)
-            return x, y
-        base_dir = self.input_data_folder
-        annotation_folder = os.path.join(base_dir, 'annotation')
-        annotation_path_list = [os.path.join(annotation_folder, item) for item in os.listdir(annotation_folder)]
-        data_pair = []
-        for item in annotation_path_list:
-            sample_frames_item = []
-            for i in range(0, 5):
-                frame_path_item = item.replace('annotation', 'frame_{}'.format(i))
-                frame_path_item = frame_path_item.replace('_2.png', '_{}.png'.format(i))
-                sample_frames_item.append(
-                    resize_img_by_keep_ratio(frame_path_item, resize_max=256, as_gray=False, mode='max'))
-            annotation_data_item = resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max')
-            x, y = _preprocessing(sample_frames_item, annotation_data_item)
-            data_pair.append([x, y])
-        return data_pair
-
-    def _output_format(self, x, y, y_pred):
-        """
-        将结果处理成可视化的图，如image还原0-255, mask的一些ndim操作等
-        :param x:
-        :param y:
-        :param y_pred:
-        :return: 一个字典，key为tag, value为图片
-        """
-        # key_list = ['image', 'y_gt', 'y_pred']
-        output_dict = {}
-        x = np.squeeze(x)
-        x = x[0]
-        output_dict['image'] = np.squeeze(np.uint8((x+1)*127.5))
-        output_dict['y_gt'] = np.squeeze(np.uint8(y/y.max()*255))
-        y_pred = np.squeeze(y_pred)
-        # 当是连个class分类时，仅可视化前景通道
-        if y_pred.shape[-1] == 2:
-            y_pred = y_pred[:, :, -1]
-        output_dict['y_pred'] = np.squeeze(np.uint8(y_pred*255))
-        return output_dict
-
-
-class SeqTrimapImageTensorboard(ImageTensorboard):
-    """
-    输入rgb*5，输出(w,h,2/1)的中间结果可视化
-    """
-    def _read_data_pairs(self):
-        """
-        读取连续五帧数据，及其对应的mask
-        :return:
-        """
-        def _preprocessing(x, y):
-            x = np.stack(x, axis=0)
-            x = np.float32(x)
-            x = x / 127.5 - 1
-            x = np.expand_dims(x, axis=0)
-            return x, y
-        base_dir = self.input_data_folder
-        annotation_folder = os.path.join(base_dir, 'annotation')
-        annotation_path_list = [os.path.join(annotation_folder, item) for item in os.listdir(annotation_folder)]
-        data_pair = []
-        for item in annotation_path_list:
-            sample_frames_item = []
-            for i in range(0, 5):
-                frame_path_item = item.replace('annotation', 'frame_{}'.format(i))
-                frame_path_item = frame_path_item.replace('_2.png', '_{}.png'.format(i))
-                sample_frames_item.append(
-                    resize_img_by_keep_ratio(frame_path_item, resize_max=256, as_gray=False, mode='max'))
-            annotation_data_item = resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max')
-            x, y = _preprocessing(sample_frames_item, annotation_data_item)
-            data_pair.append([x, y])
-        return data_pair
-
-    def _output_format(self, x, y, y_pred):
-        """
-        将结果处理成可视化的图，如image还原0-255, mask的一些ndim操作等
-        :param x:
-        :param y:
-        :param y_pred:
-        :return: 一个字典，key为tag, value为图片
-        """
-        # key_list = ['image', 'y_gt', 'y_pred']
-        output_dict = {}
-        x = np.squeeze(x)[2, :, :, :]
-        output_dict['image'] = np.squeeze(np.uint8((x + 1) * 127.5))
-        output_dict['y_gt'] = np.squeeze(np.uint8(y / y.max() * 255))
-        y_pred = np.squeeze(y_pred)
-        y_pred_trimap = y_pred[:, :, :3]
-        y_pred_trimap = np.squeeze(np.uint8(y_pred_trimap * 255))
-        y_pred_alpha = y_pred[:, :, -1]
-        y_pred_alpha = np.squeeze(np.uint8(y_pred_alpha * 255))
-        output_dict['y_pred_trimap'] = y_pred_trimap
-        output_dict['y_pred_alpha'] = y_pred_alpha
-        return output_dict
-
-
-class TwoFramsVis(SeqBinaryImageTensorboard):
-    def _read_data_pairs(self):
-        """
-        读取连续五帧数据，及其对应的mask
-        :return:
-        """
-        def _preprocessing(x, y):
-            x = np.stack(x, axis=0)
-            x = np.float32(x)
-            x = x / 127.5 - 1
-            x = np.expand_dims(x, axis=0)
-            return x, y
-        base_dir = self.input_data_folder
-        annotation_folder = os.path.join(base_dir, 'annotation')
-        annotation_path_list = [os.path.join(annotation_folder, item) for item in os.listdir(annotation_folder)]
-        data_pair = []
-        for item in annotation_path_list:
-            sample_frames_item = []
-            for i in range(0, 5):
-                frame_path_item = item.replace('annotation', 'frame_{}'.format(i))
-                frame_path_item = frame_path_item.replace('_2.png', '_{}.png'.format(i))
-                sample_frames_item.append(
-                    resize_img_by_keep_ratio(frame_path_item, resize_max=256, as_gray=False, mode='max'))
-            annotation_data_item = resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max')
-            img_prev = random.choice(sample_frames_item)
-            img_current = sample_frames_item[2]
-            x, y = _preprocessing([img_prev, img_current], annotation_data_item)
-            data_pair.append([x, y])
-        return data_pair
-
-
-class TrimapAlphaImageTensorboard(ImageTensorboard):
-    """
-    输入rgb，输出[trimap, alpha]4channel的可视化
-    """
-    def _read_data_pairs(self):
-        """
-        根据要求读取数据，并预处理成模型输入
-        :return: list of (x, y) pair ready for model input
-        """
-        img_f = os.path.join(self.input_data_folder, 'image')
-        label_f = os.path.join(self.input_data_folder, 'annotation')
-        img_dir_list = [os.path.join(img_f, item) for item in os.listdir(img_f)]
-        ann_dir_list = [os.path.join(label_f, item) for item in os.listdir(label_f)]
-        img_list = [resize_img_by_keep_ratio(item, resize_max=256, as_gray=False, mode='max').astype(np.float32) for item in
-                    img_dir_list]
-        img_list = [item / 127.5 - 1 for item in img_list]
-        img_list = [np.expand_dims(item, axis=0) for item in img_list]
-        ann_list = [resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max').astype(np.float32) for item in ann_dir_list]
-        return list(zip(img_list, ann_list))
-
-    def _output_format(self, x, y, y_pred):
-        """
-        将结果处理成可视化的图，如image还原0-255, mask的一些ndim操作等
-        :param x:
-        :param y:
-        :param y_pred:
-        :return: 一个字典，key为tag, value为图片
-        """
-        # key_list = ['image', 'y_gt', 'y_pred']
-        output_dict = {}
-        output_dict['image'] = np.squeeze(np.uint8((x+1)*127.5))
-        output_dict['y_gt'] = np.squeeze(np.uint8(y/y.max()*255))
-        y_pred = np.squeeze(y_pred)
-        y_pred_trimap = y_pred[:, :, :3]
-        y_pred_trimap = np.squeeze(np.uint8(y_pred_trimap*255))
-        y_pred_alpha = y_pred[:, :, -1]
-        y_pred_alpha = np.squeeze(np.uint8(y_pred_alpha*255))
-        output_dict['y_pred_trimap'] = y_pred_trimap
-        output_dict['y_pred_alpha'] = y_pred_alpha
-        return output_dict
-
-
-#TODO: bug to fix
-# TODO list: 1.增加可视化指定层输出的操作 2. CyclicLR测试
-class IntermediateVisualization(Callback):
-    """
-    针对binary segmentation model的中间可视化
-    """
-    def __init__(self,
-               input_data_folder,
-               save_dir,
-               input_size=256,
-               ):
-        super(IntermediateVisualization, self).__init__()
-        self.input_data_folder = input_data_folder
-        self.save_dir = save_dir
-        self.input_shape=input_size
-
-    def on_epoch_end(self, epoch, logs=None):
-        img_f = os.path.join(self.input_data_folder, 'image')
-        label_f = os.path.join(self.input_data_folder, 'annotation')
-        img_dir_list = [os.path.join(img_f, item) for item in os.listdir(img_f)]
-        ann_dir_list = [os.path.join(label_f, item) for item in os.listdir(label_f)]
-        img_list = [resize_with_padding_from_dir(item, desired_size=self.input_shape).astype(np.float32) for item in img_dir_list]
-        img_list = [item/127.5 - 1 for item in img_list]
-        ann_list = [resize_with_padding_from_dir(item, self.input_shape).astype(np.float32) for item in ann_dir_list]
-        ann_list = [np.uint8(item > 0) for item in ann_list]
-        # try exception to avoid OOM error
-        try:
-            img_batch = np.stack(img_list, axis=0)
-            pre_mask = self.model.predict_on_batch(img_batch)
-            pre_mask = np.split(pre_mask, pre_mask.shape[0], axis=0)
-            pre_mask = [np.squeeze(item) for item in pre_mask]
-        except Exception as e:
-            print (e)
-            pre_mask = []
-            for item in img_list:
-                img_batch = np.expand_dims(item, axis=0)
-                pre_mask_item = self.model.predict_on_batch(img_batch)
-                pre_mask.append(np.squeeze(pre_mask_item))
-        # stack for visualization
-        i = 0
-        for img_item, ann_item, pre_item in zip(img_list, ann_list, pre_mask):
-            img_item = np.uint8((img_item + 1) * 127.5)
-            ann_item = np.stack([ann_item*255]*3, axis=-1).astype('uint8')
-            if np.ndim(pre_item) == 2:
-                channel = 1
-            else:
-                channel = pre_item.shape[-1]
-            # 只保留最多三个通道
-            if channel > 3:
-                pre_item = pre_item[:, :, :3]
-                channel = pre_item.shape[-1]
-            # 通道可视化
-            if channel == 2:
-                pre_item = np.hstack(np.split(pre_item, 2, axis=-1))
-                pre_item = np.stack([pre_item*255]*3, axis=-1).astype('uint8')
-                pre_item = np.squeeze(pre_item)
-            elif channel == 3:
-                pre_item = np.squeeze(pre_item) / pre_item.max() * 255
-                pre_item = np.uint8(pre_item)
-            elif channel == 1:
-                pre_item = np.squeeze(pre_item) / pre_item.max() * 255
-                pre_item = np.uint8(pre_item)
-                pre_item = np.stack([pre_item]*3, axis=-1)
-            else:
-                print ('error with output')
-                print(pre_item.shape)
-                exit(0)
-            merge_img = np.hstack([img_item, ann_item, pre_item])
-            saved_name = '{}_{}.png'.format(i, time.ctime())
-            saved_name = saved_name.replace(' ', '-')
-            saved_name = saved_name.replace(':', '-')
-            dst = os.path.join(self.save_dir, saved_name)
-            plt.imsave(dst, merge_img)
-            i += 1
-
-
-class IntermediateVisualizationTimapAlpha(Callback):
-    """
-    针对exp22-28的中间可视化
-    """
-    def __init__(self,
-               input_data_folder,
-               save_dir,
-               input_size=256,
-               ):
-        super(IntermediateVisualizationTimapAlpha, self).__init__()
-        self.input_data_folder = input_data_folder
-        self.save_dir = save_dir
-        self.input_shape=input_size
-
-    def on_epoch_end(self, epoch, logs=None):
-        img_f = os.path.join(self.input_data_folder, 'image')
-        label_f = os.path.join(self.input_data_folder, 'annotation')
-        img_dir_list = [os.path.join(img_f, item) for item in os.listdir(img_f)]
-        ann_dir_list = [os.path.join(label_f, item) for item in os.listdir(label_f)]
-        img_list = [resize_with_padding_from_dir(item, desired_size=self.input_shape).astype(np.float32) for item in img_dir_list]
-        img_list = [item/127.5 - 1 for item in img_list]
-        ann_list = [resize_with_padding_from_dir(item, self.input_shape).astype(np.float32) for item in ann_dir_list]
-        ann_list = [np.uint8(item > 0) for item in ann_list]
-        # try exception to avoid OOM error
-        try:
-            img_batch = np.stack(img_list, axis=0)
-            pre_mask = self.model.predict_on_batch(img_batch)
-            pre_mask = np.split(pre_mask, pre_mask.shape[0], axis=0)
-            pre_mask = [np.squeeze(item) for item in pre_mask]
-        except Exception as e:
-            print (e)
-            pre_mask = []
-            for item in img_list:
-                img_batch = np.expand_dims(item, axis=0)
-                pre_mask_item = self.model.predict_on_batch(img_batch)
-                pre_mask.append(np.squeeze(pre_mask_item))
-        # stack for visualization
-        i = 0
-        for img_item, ann_item, pre_item in zip(img_list, ann_list, pre_mask):
-            img_item = np.uint8((img_item + 1) * 127.5)
-            ann_item = np.stack([ann_item*255]*3, axis=-1).astype('uint8')
-            trimap = np.squeeze(pre_item[:, :, :3]) * 255
-            trimap = np.uint8(trimap)
-            alpha = np.squeeze(pre_item[:, :, -1])
-            alpha = np.stack([alpha*255]*3, axis=-1)
-            alpha = np.uint8(alpha)
-            merge_img = np.hstack([img_item, ann_item, trimap, alpha])
-            saved_name = '{}_{}.png'.format(i, time.ctime())
-            saved_name = saved_name.replace(' ', '-')
-            saved_name = saved_name.replace(':', '-')
-            dst = os.path.join(self.save_dir, saved_name)
-            plt.imsave(dst, merge_img)
-            i += 1
-
-
-class IntermediateVisualizationTimapAlphaInTensorboard(ImageTensorboard):
-    def __init__(self,
-               input_data_folder,
-               log_dir,
-               ):
-        super(IntermediateVisualizationTimapAlphaInTensorboard, self).__init__()
-        self.input_data_folder = input_data_folder
-        self.log_dir = log_dir
-        self.writer = tf_summary.FileWriter(self.log_dir)
-        self.data_pairs = self._read_data_pairs()
-
-    def _read_data_pairs(self):
-        """
-        读取连续五帧数据，及其对应的mask
-        :return:
-        """
-        base_dir = self.input_data_folder
-        annotation_folder = os.path.join(base_dir, 'annotation')
-        annotation_path_list = [os.path.join(annotation_folder, item) for item in os.listdir(annotation_folder)]
-        data_pair = []
-        for item in annotation_path_list:
-            sample_frames_item = []
-            for i in range(0, 5):
-                frame_path_item = item.replace('annotation', 'frame_{}'.format(i))
-                frame_path_item = frame_path_item.replace('_2.png', '_{}.png'.format(i))
-                sample_frames_item.append(resize_img_by_keep_ratio(frame_path_item, resize_max=256, as_gray=False, mode='max'))
-            annotation_data_item = resize_img_by_keep_ratio(item, resize_max=256, as_gray=True, mode='max')
-            sample_item = [sample_frames_item, annotation_data_item]
-            sample_item = self._input_processing(sample_item)
-            data_pair.append(sample_item)
-        return data_pair
-
-    def _input_processing(self, data_pair_item):
-        frames, mask = data_pair_item
-        frame_middle = frames[2]
-        frames_avg = np.mean(np.stack(frames, axis=0), axis=0)
-        frame_df = np.abs(frame_middle - frames_avg)
-        # value norm
-        frame_middle = np.float32(frame_middle)
-        frame_middle = frame_middle / 127.5 - 1
-        frame_df = np.float32(frame_df)
-        frame_df = frame_df / (frame_df.max() + 1e-5) * 255.
-        frame_df = frame_df / 127.5 - 1
-        mask = np.float32(mask)
-        mask = mask / (mask.max() + 1e-5)
-        # dimension
-        feature_item = np.concatenate([frame_middle, frame_df], axis=-1)
-        feature_item = np.expand_dims(feature_item, axis=0)
-        assert np.ndim(feature_item) == 4, 'input shape error for intermediate visualization'
-        return feature_item, mask
-
-    def on_epoch_end(self, epoch, logs=None):
-        for idx, item in enumerate(self.data_pairs):
-            feature_item, mask = item
-            pre_item = self.model.predict_on_batch(feature_item)
-            pre_item = np.squeeze(pre_item)
-            trimap = np.squeeze(pre_item[:, :, :3]) * 255
-            trimap = np.uint8(trimap)
-            alpha = np.squeeze(pre_item[:, :, -1])
-            alpha = np.stack([alpha * 255] * 3, axis=-1)
-            alpha = np.uint8(alpha)
-            # middle image summary
-            middle_img_vis = (np.squeeze(feature_item[:, :, :, :3]) + 1) * 127.5
-            middle_img_vis = np.uint8(middle_img_vis)
-            self.write_image_summary(middle_img_vis, 'middle_img_{}'.format(idx), epoch)
-            middle_img_vis = (np.squeeze(feature_item[:, :, :, 3:]) + 1) * 127.5
-            middle_img_vis = np.uint8(middle_img_vis)
-            self.write_image_summary(middle_img_vis, 'diff_{}'.format(idx), epoch)
-            self.write_image_summary(trimap, 'trimap_{}'.format(idx), epoch)
-            self.write_image_summary(alpha, 'alpha_{}'.format(idx), epoch)
-        self.writer.flush()
-
-
 class CustomModelCheckpoint(Callback):
   """
-  从官方的checkpoint得来，无论训练时是多gpu还是单GPU，保存时都为单GPU checkpoint, 且不保存opt:include_optimizer=False
+  官方的checkpointcallback有一个问题就是会保存完整的图，如果多GPU训练就会保存多GPU图。此改正原API行为，
+  无论训练时是多gpu还是单GPU，保存时都为单GPU checkpoint, 且不保存opt:（include_optimizer=False）
   """
   def __init__(self,
                filepath,
@@ -610,7 +166,6 @@ class CustomModelCheckpoint(Callback):
           model_s.save(filepath, overwrite=True, include_optimizer=False)
 
 
-# TODO:to test
 class CyclicLR(Callback):
     """This callback implements a cyclical learning rate policy (CLR).
     The method cycles the learning rate between two boundaries with

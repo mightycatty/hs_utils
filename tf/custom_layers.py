@@ -8,7 +8,6 @@ from tensorflow.python.keras.layers import Conv2D, BatchNormalization, Add, Acti
     ZeroPadding2D
 from tensorflow.python.keras import backend as K, backend, layers
 import cv2
-from dataset_utils.img_processing_tf import tf_get_edge
 
 
 def dense_block_sepconv(x, nb_layers, nb_filter, depth_activation=False, relu6=False):
