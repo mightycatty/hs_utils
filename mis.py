@@ -93,15 +93,6 @@ class MyLog(object):
         return response
 
 
-class PersonalThreading:
-    def __init__(self, worker_fn, **kwargs):
-        self.out_q = Queue(50)
-        self.thread = Thread(target=worker_fn, args=(out_q=se))
-
-    def add_worker(self, worker_fn, input_queue=None, output_queue=None):
-        fn_name = worker_fn.func_name
-
-
 if __name__ == '__main__':
     logger = MyLog('test.log', clean_format=True)
     logger.fire_message_via_bot('oh, hi')
