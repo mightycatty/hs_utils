@@ -146,5 +146,5 @@ def clean_graph_for_inference(graph, input_node_names, output_node_names):
     graph_def = optimize_for_inference(graph.as_graph_def(), input_node_names, output_node_names, placeholder_type_enum)
     graph = tf.Graph()
     with graph.as_default():
-        tf.import_graph_def(graph_def)
+        tf.import_graph_def(graph_def) # seems that this operation add "import/" prefix to the whole graph
     return graph
