@@ -37,13 +37,7 @@ class InferenceWithPb:
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)
 
-    def predict(self, input_data, pre_processing_fn=None, post_processing_fn=None, **kwargs):
-        if pre_processing_fn is not None:
-            input_data = pre_processing_fn(input_data, **kwargs)
-        if np.rank(input_data) == 3:
-            input_data = np.expand_dims(input_data, axis=0) # batch size = 1
+    def predict(self, input_data, **kwargs):
         result = self.sess.run([self.output], feed_dict={self.input: input_data})
-        if post_processing_fn is not None:
-            result = post_processing_fn(result, **kwargs)
         return result
 

@@ -100,6 +100,8 @@ def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False):
     """
     output a constant graph for inference and test from a active tf session
     keep in mind that usually a session in tensorflow if full of duplicate and useless stuff, clean it up before export
+    known bug:
+        sometime frozen pb only consists of constant node without edges.
     :param sess:
     :param export_path:
     :param export_name:
