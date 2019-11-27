@@ -46,6 +46,43 @@ def input_fn_from_tfrecord(tfrecord_filenames_list, tf_example_parser_fn, batch_
     return dataset
 
 
+class InputFnFromTFRecords:
+    def __init__(self, tfrecords, parser_fn, batch_size=32, val_num=None, **kwargs):
+        self.tfrecords = [tfrecords] if type(tfrecords) is str else tfrecords
+        self.parser_fn = parser_fn
+        self.kwargs = kwargs
+        self._read_tfrecords(**kwargs)
+
+    def _split_train_val(self, val_num=1000):
+        self._val_dataset_raw = self._dataset_raw.take(val_num*len(self.tfrecords))
+        self._train_dataset_raw = self._dataset_raw.skip(val_num * len(self.tfrecords))
+
+    def _read_tfrecords(self, num_parallel_reads=None, buffer_size=None, **kwargs):
+        # read data from tf record
+        num_parallel_reads = num_parallel_reads or len(self.tfrecords)
+        self._dataset_raw = tf.data.TFRecordDataset(self.tfrecords, num_parallel_reads=num_parallel_reads,
+                                                   buffer_size=buffer_size)
+
+    def _dataset_iteration_initialization(self):
+        dataset = dataset.prefetch(buffer_size=batch_size * 2)
+        # avoid shuffle to stabilize val metrics
+        # dataset = dataset.shuffle(buffer_size=shuffle_buffer_size)
+        dataset = dataset.repeat()
+        # Parse the record into tensors.
+        dataset = dataset.map(parser_fn, num_parallel_calls=map_cores)
+        # augmentation
+        if augmentation:
+            assert aug_fn is not None, 'augmentation function must be provided if augmentation flag is true'
+            dataset = dataset.map(aug_fn, num_parallel_calls=map_cores)
+        dataset = dataset.batch(batch_size)
+        if debug:
+            iterator = dataset.make_one_shot_iterator()
+            dataset = iterator.get_next()
+        return dataset
+
+    def debug(self):
+        pass
+
 def test_single_frame():
     """
     检查单帧的tfrecord是否正常
