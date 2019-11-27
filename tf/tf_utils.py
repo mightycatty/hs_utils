@@ -4,13 +4,14 @@ from tensorflow.python.keras import backend as K
 
 def calculate_flogs(graph):
     """
-    计算flops，传入graph, 当为keras构建时可
-        graph = tf.keras.backend.get_graph()
-    注意：
-        模型构建时不能用none size且需指定batch size，否则无法计算
-        img_input = Input(batch_shape=(1, 256, 256, 3))
+    cal flops of a graph
+    do mind:
+        tensor with shape of none should be avoid to make a meaningful calculation.
+        eg:
+            when construct graph with tf keras api, appoint the full shape(include the batch size axis) to input tensor as below:
+                img_input = Input(batch_shape=(1, 256, 256, 3))
     :param graph: tensorflow graph
-    :return: directly print in terminal
+    :return:
     """
     run_meta = tf.RunMetadata()
     opts = tf.profiler.ProfileOptionBuilder.float_operation()
@@ -50,7 +51,7 @@ def keras_model_wrapper(model_fn, model_name=None, input_shape=(None, None, 3), 
     return model
 
 
-def convert_keras_model_to_pb(model_fn, weight_path, input_shape, export_path, export_name):
+def freeze_keras_model_to_constant_pb(model_fn, weight_path, input_shape, export_path, export_name):
     """
     given a model_fn and saved_weights of keras model, a constant graph is produced for inference and test
     **do mind** that name of corresponding tensor in keras model will have prefix and suffix,
@@ -95,7 +96,7 @@ def convert_keras_model_to_pb(model_fn, weight_path, input_shape, export_path, e
         return False
 
 
-def convert_sess_to_pb(sess, export_path, export_name):
+def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False):
     """
     output a constant graph for inference and test from a active tf session
     keep in mind that usually a session in tensorflow if full of duplicate and useless stuff, clean it up before export
@@ -119,8 +120,29 @@ def convert_sess_to_pb(sess, export_path, export_name):
             return frozen_graph
     try:
         frozen_graph = _freeze_session(sess)
-        tf.train.write_graph(frozen_graph, export_path, export_name+'.pb', as_text=False)
+        tf.train.write_graph(frozen_graph, export_path, export_name+'.pb', as_text=as_text)
         return True
     except Exception as e:
         print (e)
         return False
+
+
+def clean_graph_for_inference(graph, input_node_names, output_node_names):
+    """
+    trim useless and training-relative nodes for inference.
+    do mind that it's merely about graph cleanness, not graph level optimization
+    :param graph: a constructed graph
+    :param input_node_names: name of input nodes, str or list
+    :param output_node_names:
+    :return: a trimmed graph
+    """
+    from tensorflow.python.tools.optimize_for_inference_lib import optimize_for_inference
+    # ================================ graph optimization ==================================
+    input_node_names = [input_node_names] if type(input_node_names) is str else input_node_names
+    output_node_names = [output_node_names] if type(output_node_names) is str else output_node_names
+    placeholder_type_enum = tf.float32.as_datatype_enum
+    graph_def = optimize_for_inference(graph.as_graph_def(), input_node_names, output_node_names, placeholder_type_enum)
+    graph = tf.Graph()
+    with graph.as_default():
+        tf.import_graph_def(graph_def)
+    return graph
