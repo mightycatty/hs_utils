@@ -9,7 +9,7 @@ import os
 
 
 def input_fn_from_tfrecord(tfrecord_filenames_list, tf_example_parser_fn, batch_size=32, map_cores=4, augmentation=False,
-                           aug_fn=None, debug=False, shuffle_buffer_size=1000, **kwargs):
+                           aug_fn=None, debug=False, shuffle_flag=False, shuffle_buffer_size=1000, **kwargs):
     """
     simple code pipeline for building input_fn consuming tf records
     :param tfrecord_filenames_list: dir to a tf record of list of which
@@ -31,7 +31,8 @@ def input_fn_from_tfrecord(tfrecord_filenames_list, tf_example_parser_fn, batch_
                                       buffer_size=None)
     dataset = dataset.prefetch(buffer_size=batch_size * 2)
     # avoid shuffle to stabilize val metrics
-    dataset = dataset.shuffle(buffer_size=shuffle_buffer_size)
+    if shuffle_flag:
+        dataset = dataset.shuffle(buffer_size=shuffle_buffer_size)
     dataset = dataset.repeat()
     # Parse the record into tensors.
     dataset = dataset.map(tf_example_parser_fn, num_parallel_calls=map_cores)

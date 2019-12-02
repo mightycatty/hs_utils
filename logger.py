@@ -1,33 +1,6 @@
 import logging
 import telebot
 from telebot import apihelper
-from threading import Thread
-from queue import Queue
-
-
-def line_profile(func):
-    """
-    逐行profile
-    usage:
-        from evaluation_utils import line_profile
-        @line_profile
-        some_fn()
-    reference:
-        https://github.com/rkern/line_profiler#kernprof
-    :param func:
-    :return:
-    """
-    from functools import wraps
-    import line_profiler
-    prof = line_profiler.LineProfiler()
-    @wraps(func)
-    def newfunc(*args, **kwargs):
-        try:
-            pfunc = prof(func)
-            return pfunc(*args, **kwargs)
-        finally:
-            prof.print_stats(1e-3)
-    return newfunc
 
 
 class MyLog(object):
@@ -35,7 +8,7 @@ class MyLog(object):
     requirement: telebot
         https://github.com/eternnoir/pyTelegramBotAPI
     """
-    def __init__(self, log_file='output.log', tele_bot_token=None, chat_id=None, clean_format=False):
+    def __init__(self, log_file='output.log', tele_bot_token=None, chat_id=None, clean_format=True):
         # create logger
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
@@ -54,7 +27,6 @@ class MyLog(object):
         # bot与你的聊天的chat id，默认是你自己
         _default_chat_id = '786535272'
         # 如果你的网络环境不科学，请自备工具，否则会连不上服务器
-        apihelper.proxy = {'https': 'http://www.v5lab.cn:8011'}
         self.chat_id = _default_chat_id if chat_id is None else tele_bot_token
         self.tb = telebot.TeleBot(self.token)
 
@@ -94,6 +66,4 @@ class MyLog(object):
 
 
 if __name__ == '__main__':
-    logger = MyLog('test.log', clean_format=True)
-    logger.fire_message_via_bot('oh, hi')
-
+    logger = MyLog()

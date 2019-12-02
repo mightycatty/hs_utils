@@ -6,8 +6,8 @@ from tensorflow.python.keras import backend as K
 
 class InferenceWithPb:
     """
-    最简单的封装pb模型，供inference用。
-    注意没有整合后处理，必须提供已经预处理的数据或者提供预处理函数；输出为tensor直出或者提供后处理函数
+    compact tensorflow inference backend which takes in a froze .pb and names of input and output tensor
+    data feed to the network is required to be pre-processed beforehand, raw output from network is delivered.
     """
     def __init__(self, input_name, output_name, pb_dir):
         self.input_name = input_name
@@ -32,18 +32,12 @@ class InferenceWithPb:
         self.output = graph.get_tensor_by_name(self.output_name)
 
     def _init_session(self):
-        # tf1.14下会报内存错误
+        # without below configuration, raise error on tf_gpu_1.14
         config = tf.ConfigProto()
         config.gpu_options.allow_growth = True
         self.sess = tf.Session(config=config)
 
-    def predict(self, input_data, pre_processing_fn=None, post_processing_fn=None, **kwargs):
-        if pre_processing_fn is not None:
-            input_data = pre_processing_fn(input_data, **kwargs)
-        if np.rank(input_data) == 3:
-            input_data = np.expand_dims(input_data, axis=0) # batch size = 1
+    def predict(self, input_data, **kwargs):
         result = self.sess.run([self.output], feed_dict={self.input: input_data})
-        if post_processing_fn is not None:
-            result = post_processing_fn(result, **kwargs)
         return result
 
