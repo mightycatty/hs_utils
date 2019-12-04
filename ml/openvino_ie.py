@@ -5,13 +5,15 @@ import sys
 
 
 class InferenceWithIE:
-    def __init__(self, model_xml_dir, device='CPU', cpu_extension=None, **kwargs):
+    def __init__(self, model_xml_dir, device='CPU', cpu_extension=None, pre_processing_fn=None, post_processing_fn=None, **kwargs):
         if cpu_extension is None:
             cpu_extension = r'C:\Program Files (x86)\IntelSWTools\openvino\deployment_tools\inference_engine\bin\intel64\Release\cpu_extension_avx2.dll'
         self.cpu_extension = cpu_extension
         self.model_xml = model_xml_dir
         self.device = device
         logging.basicConfig(format="[ %(levelname)s ] %(message)s", level=logging.INFO, stream=sys.stdout)
+        self.pre_processing_fn = pre_processing_fn
+        self.post_processing_fn = post_processing_fn
         self._model_init()
 
     def _model_init(self):
@@ -50,7 +52,10 @@ class InferenceWithIE:
         config = None
         self.exec_net = ie.load_network(network=net, device_name=self.device, config=config)
 
-    def predict(self, image):
-        res = self.exec_net.infer(inputs={self.input_blob: image})
-        res = res[self.out_blob]
-        return res
+    def predict(self, input_data):
+        if self.pre_processing_fn:
+            input_data = self.pre_processing_fn(input_data)
+        result = self.sess.run([self.output], feed_dict={self.input: input_data})[0]
+        if self.post_processing_fn:
+            result = self.post_processing_fn(result)
+        return result
