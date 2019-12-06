@@ -1,10 +1,13 @@
+"""
+some frequently used tensorflow util funcitons
+"""
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
 
 
 def calculate_flogs(graph):
     """
-    cal flops of a graph
+    cal flops of a tensorflow graph
     do mind:
         tensor with shape of none should be avoid to make a meaningful calculation.
         eg:
@@ -136,15 +139,35 @@ def clean_graph_for_inference(graph, input_node_names, output_node_names):
     :param graph: a constructed graph
     :param input_node_names: name of input nodes, str or list
     :param output_node_names:
-    :return: a trimmed graph
+    :return: a clean graph
     """
     from tensorflow.python.tools.optimize_for_inference_lib import optimize_for_inference
     # ================================ graph optimization ==================================
     input_node_names = [input_node_names] if type(input_node_names) is str else input_node_names
     output_node_names = [output_node_names] if type(output_node_names) is str else output_node_names
     placeholder_type_enum = tf.float32.as_datatype_enum
-    graph_def = optimize_for_inference(graph.as_graph_def(), input_node_names, output_node_names, placeholder_type_enum)
+    if 'GraphDef' not in str(type(graph)):
+        graph = graph.as_graph_def()
+    graph_def = optimize_for_inference(graph, input_node_names, output_node_names, placeholder_type_enum)
     graph = tf.Graph()
     with graph.as_default():
-        tf.import_graph_def(graph_def) # seems that this operation add "import/" prefix to the whole graph
+        tf.import_graph_def(graph_def)
     return graph
+
+
+def output_pb_to_tensorboard(pb_dir, log_dir):
+    """
+     RUN:
+        tensorboard --logdir=log_dir --host=0.0.0.0
+    at the completeness of this function
+    :param pb_dir:
+    :param log_dir:
+    :return: None
+    """
+    with tf.Session() as sess:
+        with tf.gfile.FastGFile(pb_dir, 'rb') as f:
+            graph_def = tf.GraphDef()
+            graph_def.ParseFromString(f.read())
+            graph = tf.import_graph_def(graph_def)
+        train_writer = tf.summary.FileWriter(log_dir)
+        train_writer.add_graph(sess.graph)
