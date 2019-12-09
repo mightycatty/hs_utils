@@ -4,11 +4,11 @@ import logging
 import sys
 
 
+CPU_EXTENSION = r'C:\Program Files (x86)\IntelSWTools\openvino\deployment_tools\inference_engine\bin\intel64\Release\cpu_extension_avx2.dll'
+
+
 class InferenceWithIE:
-    def __init__(self, model_xml_dir, device='CPU', cpu_extension=None, pre_processing_fn=None, post_processing_fn=None, **kwargs):
-        if cpu_extension is None:
-            cpu_extension = r'C:\Program Files (x86)\IntelSWTools\openvino\deployment_tools\inference_engine\bin\intel64\Release\cpu_extension_avx2.dll'
-        self.cpu_extension = cpu_extension
+    def __init__(self, model_xml_dir, device='CPU', pre_processing_fn=None, post_processing_fn=None, **kwargs):
         self.model_xml = model_xml_dir
         self.device = device
         logging.basicConfig(format="[ %(levelname)s ] %(message)s", level=logging.INFO, stream=sys.stdout)
@@ -22,7 +22,7 @@ class InferenceWithIE:
         ie = IECore()
         found_device = ie.available_devices
         logging.info("found devices:\n{}".format(found_device))
-        ie.add_extension(self.cpu_extension, "CPU")
+        ie.add_extension(CPU_EXTENSION, "CPU")
         # Read IR
         logging.info("Loading network files:\n\t{}\n\t{}".format(self.model_xml, model_bin))
         net = IENetwork(model=self.model_xml, weights=model_bin)
