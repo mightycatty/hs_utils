@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow import gfile
+import logging
 import numpy as np
 from tensorflow.python.keras import backend as K
 
@@ -8,12 +9,15 @@ from tensorflow.python.keras import backend as K
 class InferenceWithPb:
     """
     compact tensorflow inference backend which takes in a froze .pb and names of input and output tensor.
-    data feed to the network is required to be pre-processed beforehand, raw output from network is delivered without any post-processing.
-    Or you can register your own preprocessing function and postprocessing function to make a abstract model unit.
+        1. data feed to the network is required to be pre-processed beforehand, raw output from network is delivered without any post-processing.
+            Or you can register your own preprocessing function and postprocessing function to make a abstract model unit.
+        2. tf-trt supported, which tensorflow official claims a 8x speedup(actually not, so try it out for you own good)
+        3. every instance of InferenceWithPb create a new session, not using the default session
     """
-    def __init__(self, input_name, output_name, pb_dir, pre_processing_fn=None, post_processing_fn=None):
+    def __init__(self, input_name, output_name, pb_dir, pre_processing_fn=None, post_processing_fn=None, tf_trt=False):
         self.input_name = input_name
         self.output_name = output_name
+        self.tf_trt = tf_trt
         self.pb_dir = pb_dir
         self.pre_processing_fn = pre_processing_fn
         self.post_processing_fn = post_processing_fn
@@ -30,8 +34,21 @@ class InferenceWithPb:
     def _construct_graph(self):
         tf.reset_default_graph()
         graph_def = InferenceWithPb._read_pb(self.pb_dir)
+        # tensorrt speed up test
+        if self.tf_trt:
+            import tensorflow.contrib.tensorrt as trt
+            output_name = self.output_name.strip('import/')
+            output_name = output_name.strip(':0')
+            graph_def = trt.create_inference_graph(
+                input_graph_def=graph_def,
+                outputs=[output_name],
+                precision_mode='FP16',
+                max_workspace_size_bytes=1 << 30)
         tf.import_graph_def(graph_def)
         graph = tf.get_default_graph()
+        prefix = 'import/'  # tf.import_graph introduces a global name scope: import/
+        self.input_name = prefix + self.input_name
+        self.output_name = prefix + self.output_name
         self.input = graph.get_tensor_by_name(self.input_name)
         self.output = graph.get_tensor_by_name(self.output_name)
 
