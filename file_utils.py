@@ -37,6 +37,7 @@ def video_reader(video_dir, loop=False, cvt_format='RGB', *args, **kwargs):
         else:
             error_count += 1
             if error_count > max_error_num:
+                cap.release()
                 return
             if loop and (type(video_dir) is str):
                 del cap
@@ -58,6 +59,12 @@ class VideoWriter:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            self._video_writer.release()
+        finally:
+            pass
+
+    def __del__(self):
         try:
             self._video_writer.release()
         finally:

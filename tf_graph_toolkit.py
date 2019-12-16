@@ -1,31 +1,50 @@
 """
-some frequently used tensorflow util funcitons
+tensorflow-graph involved toolkit and functions
 """
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
 
 
-def get_graph_def_from_pb(graph_filepath):
-    with tf.gfile.GFile(graph_filepath, 'rb') as f:
-        graph_def = tf.GraphDef()
-        graph_def.ParseFromString(f.read())
-        return graph_def
-
-
-def calculate_flogs(graph):
+def read_pb(graph_filepath):
     """
-    cal flops of a tensorflow graph
-    do mind:
-        tensor with shape of none should be avoid to make a meaningful calculation.
-        eg:
-            when construct graph with tf keras api, appoint the full shape(include the batch size axis) to input tensor as below:
-                img_input = Input(batch_shape=(1, 256, 256, 3))
-    :param graph: tensorflow graph
+    read a pb file, return a graph def obj if success, otherwise returns None
+    :param graph_filepath:
+    :return: graph_def obj or None
+    """
+    try:
+        with tf.gfile.GFile(graph_filepath, 'rb') as f:
+            graph_def = tf.GraphDef()
+            graph_def.ParseFromString(f.read())
+            return graph_def
+    except Exception as e:
+        print ('Pb reading error:{}').format(e)
+        return False
+
+
+def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
+    """
+    cal flops of a tensorflow graph or a frozen.pb
+    usage sample:
+        # 0. from graph obj
+            # explicit batch size is require for a meaningful calculation under this circumstance
+            # input_tensor = tf.placeholder(shape=(1, h, w, c)) explicit batch size of 1
+            calculate_flops(graph)
+        # 1. from pb file
+            calculate_flops(pb, input_tensor_name='old_input_tensor_name:0', (1, 512, 512, 3))
+    :param graph_or_pb: tensorflow graph or a frozen pb
+    :param input_tensor_name: your original input tensor name
+    :param input_shape: input shape with explicit batchsize of 1: (1, h, w, c)
     :return:
     """
+    if isinstance(graph_or_pb, str):
+        assert input_tensor_name and input_shape, 'input_tensor_name and input_shape is required with a .pb input'
+        graph_def = read_pb(graph_or_pb)
+        new_input_tensor = tf.placeholder(dtype=tf.float32, shape=input_shape)
+        tf.import_graph_def(graph_def, input_map={input_tensor_name: new_input_tensor})
+        graph_or_pb = tf.get_default_graph()
     run_meta = tf.RunMetadata()
     opts = tf.profiler.ProfileOptionBuilder.float_operation()
-    flops = tf.profiler.profile(graph=graph,
+    flops = tf.profiler.profile(graph=graph_or_pb,
                                 run_meta=run_meta, cmd='op', options=opts)
     return flops.total_float_ops
 
@@ -183,14 +202,14 @@ def output_pb_to_tensorboard(pb_dir, log_dir):
 def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transforms=None):
     """
     optimize graph for inference
+        # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/tools/graph_transforms/README.md
     do mind: output pb is not best for visualization
     :param frozen_pb_or_graph_def:
     :param input_names:
     :param output_names:
     :param transforms:
-    :return:
+    :return: optimize graph def
     """
-    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/tools/graph_transforms/README.md
     from tensorflow.tools.graph_transforms import TransformGraph
     if transforms is None:
         transforms = [
@@ -207,7 +226,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
             # 'quantize_weights',
         ]
     if isinstance(frozen_pb_or_graph_def, str):
-        graph_def = get_graph_def_from_pb(frozen_pb_or_graph_def)
+        graph_def = read_pb(frozen_pb_or_graph_def)
     else:
         graph_def = frozen_pb_or_graph_def
     optimized_graph_def = TransformGraph(graph_def,
