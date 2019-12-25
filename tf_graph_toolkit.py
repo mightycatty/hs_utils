@@ -3,6 +3,7 @@ tensorflow-graph involved toolkit and functions
 """
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
+import os
 
 
 def read_pb(graph_filepath):
@@ -80,52 +81,8 @@ def keras_model_wrapper(model_fn, model_name=None, input_shape=(None, None, 3), 
     return model
 
 
-def freeze_keras_model_to_constant_pb(model_fn, weight_path, input_shape, export_path, export_name):
-    """
-    given a model_fn and saved_weights of keras model, a constant graph is produced for inference and test
-    **do mind** that name of corresponding tensor in keras model will have prefix and suffix,
-        eg. "input"  -> "import/input:0"
-    :param model_fn:
-    :param weight_path:
-    :param input_shape:
-    :param export_path:
-    :param export_name:
-    :return: false if any exception and error
-    """
-    def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
-        graph = session.graph
-        with graph.as_default():
-            freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
-            output_names = output_names or []
-            output_names += [v.op.name for v in tf.global_variables()]
-            input_graph_def = graph.as_graph_def()
-            if clear_devices:
-                for node in input_graph_def.node:
-                    node.device = ""
-            frozen_graph = tf.graph_util.convert_variables_to_constants(
-                session, input_graph_def, output_names, freeze_var_names)
-            return frozen_graph
-    try:
-        K.clear_session()
-        K.set_learning_phase(0)  # all new operations will be in test mode from now on
-        # serialize the model and get its weights, for quick re-building
-        # config = model_with_weights.get_config()
-        # weights = model_with_weights.get_weights()
-        # re-build a model where the learning phase is now hard-coded to 0
-        # new_model = tf.keras.models.Model.from_config(config, custom_objects=custom_obj)
-        # new_model.set_weights(weights)
-        model = keras_model_wrapper(model_fn=model_fn, input_shape=input_shape, model_name=export_name, verbose=False)
-        model.load_weights(weight_path)
-        sess = K.get_session()
-        frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
-        tf.train.write_graph(frozen_graph, export_path, export_name+'.pb', as_text=False)
-        return True
-    except Exception as e:
-        print (e)
-        return False
-
-
-def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False):
+def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False, keep_var_names=None, clear_devices=True,
+                               output_names=None, *args, **kwargs):
     """
     output a constant graph for inference and test from a active tf session
     keep in mind that usually a session in tensorflow if full of duplicate and useless stuff, clean it up before export
@@ -140,8 +97,8 @@ def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False):
         graph = session.graph
         with graph.as_default():
             freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
-            output_names = output_names or []
-            output_names += [v.op.name for v in tf.global_variables()]
+            # output_names = output_names or []
+            # output_names = [v.op.name for v in tf.global_variables()] # not sure what this does
             input_graph_def = graph.as_graph_def()
             if clear_devices:
                 for node in input_graph_def.node:
@@ -150,9 +107,9 @@ def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False):
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
     try:
-        frozen_graph = _freeze_session(sess)
+        frozen_graph = _freeze_session(sess, keep_var_names, output_names, clear_devices)
         tf.train.write_graph(frozen_graph, export_path, export_name+'.pb', as_text=as_text)
-        return True
+        return frozen_graph
     except Exception as e:
         print (e)
         return False
@@ -203,7 +160,10 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
     """
     optimize graph for inference
         # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/tools/graph_transforms/README.md
-    do mind: output pb is not best for visualization
+    do mind:
+        1. output pb is not best for visualization
+        2. constants folding is limit in tensorflow graph transforms, with explicit batch size 1 enables more constants folding,
+            however still constants not folded.
     :param frozen_pb_or_graph_def:
     :param input_names:
     :param output_names:
