@@ -194,3 +194,15 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
                                          output_names,
                                          transforms)
     return optimized_graph_def
+
+
+# TODO
+def constant_folding(pb_or_graphdef=None):
+    pb_dir = 'F:\heshuai\proj\stylegan\deployment\encoder_fix.pb'
+    graph_def = read_pb(pb_dir)
+    nodes = graph_def.node
+    return graph_def
+
+
+if __name__ == '__main__':
+    constant_folding()
