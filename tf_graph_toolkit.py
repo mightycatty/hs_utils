@@ -165,8 +165,8 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
         2. constants folding is limit in tensorflow graph transforms, with explicit batch size 1 enables more constants folding,
             however still constants not folded.
     :param frozen_pb_or_graph_def:
-    :param input_names:
-    :param output_names:
+    :param input_names: str or list
+    :param output_names: str or list
     :param transforms:
     :return: optimize graph def
     """
@@ -174,17 +174,21 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
     if transforms is None:
         transforms = [
             # 'remove_nodes(op=Identity)',
-            'merge_duplicate_nodes',
+            # 'merge_duplicate_nodes', # not good for visualization
             'strip_unused_nodes',
             # 'remove_attribute(attribute_name=_class)',
             'fold_constants(ignore_errors=true)',
             'fold_batch_norms',
-            'sort_by_execution_order',
-            'fuse_convolutions',
+            # 'sort_by_execution_order',
+            # 'fuse_convolutions',
             'remove_device',
             # 'quantize_nodes',
             # 'quantize_weights',
         ]
+    if isinstance(input_names, str):
+        input_names = [input_names]
+    if isinstance(output_names, str):
+        output_names = [output_names]
     if isinstance(frozen_pb_or_graph_def, str):
         graph_def = read_pb(frozen_pb_or_graph_def)
     else:
@@ -194,6 +198,30 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
                                          output_names,
                                          transforms)
     return optimized_graph_def
+
+
+def automatic_inputs_outputs_detect(graph_def):
+    """
+    automatically detect inputs(nodes with op='Placeholder') and outputs(nodes without output edges) given a graph_def.
+    Place note that this is not 100% safe, might yield wrong inputs outputs detection, double check before carrying on
+    :param graph_def:
+    :return: inputs(list), outputs(list)
+    """
+    inputs = []
+    outputs = []
+    node_inputs = []
+    # inputs detection
+    for node in graph_def.node:
+        node_inputs += node.input
+        if node.op == 'Placeholder':
+            inputs.append(node.name)
+    # outputs detection
+    node_inputs = list(set(node_inputs))
+    for node in graph_def.node:
+        if node.name not in node_inputs:
+            if node.input:
+                outputs.append(node.name)
+    return inputs, outputs
 
 
 # TODO
