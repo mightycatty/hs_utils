@@ -1,9 +1,7 @@
 """
-tensorflow-graph involved toolkit and functions
+tensorflow-graph toolkit
 """
 import tensorflow as tf
-from tensorflow.python.keras import backend as K
-import os
 
 
 def read_pb(graph_filepath):
@@ -50,48 +48,23 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
     return flops.total_float_ops
 
 
-def keras_model_wrapper(model_fn, model_name=None, input_shape=(None, None, 3), trainable=False, batch_size=None, verbose=False):
+def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, as_text=False, keep_var_names=None, clear_devices=True,
+                               dump_result=False, *args, **kwargs):
     """
-    wrap model function to a kears model ready for train
-    :param model_fn: model fn take input_tensors and delivers corresponding output_tensors
-    :param model_name:
-    :param input_shape: shape of input tensorflow, default as a RGB image with HWC format
-    :param trainable: whether model is for training
-    :param batch_size: default none
-    :param verbose: display model summary and FLOPs
-    :return:
-    """
-    if verbose:
-        batch_size = 1
-    tf.keras.backend.set_image_data_format('channels_last')
-    input_tensor = tf.keras.layers.Input(input_shape, batch_size=batch_size, name='input')
-    segmentation_output = model_fn(input_tensor)
-    model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name, trainable=trainable)
-    if verbose:
-        graph = K.get_graph()
-        calculate_flogs(graph)
-        print(model.summary())
-        # rebuild model with batch size of none
-        # TODO: a more elegant way to do this
-        K.clear_session()
-        tf.reset_default_graph()
-        input_tensor = tf.keras.layers.Input(input_shape, batch_size=batch_size, name='input')
-        segmentation_output = model_fn(input_tensor)
-        model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name, trainable=trainable)
-    return model
-
-
-def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False, keep_var_names=None, clear_devices=True,
-                               output_names=None, *args, **kwargs):
-    """
-    output a constant graph for inference and test from a active tf session
+     output a constant graph for inference and test from a active tf session
     keep in mind that usually a session in tensorflow if full of duplicate and useless stuff, clean it up before export
     known bug:
         sometime frozen pb only consists of constant node without edges.
-    :param sess:
-    :param export_path:
-    :param export_name:
-    :return:
+    :param sess: activate tf session with graph and initialized variables
+    :param export_name: export name of the .pb file
+    :param output_node_names: name of output nodes in graph, auto detect if none given(not 100% safe)
+    :param as_text:
+    :param keep_var_names:
+    :param clear_devices:
+    :param dump_result:
+    :param args:
+    :param kwargs:
+    :return: frozen graph_def or False
     """
     def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
         graph = session.graph
@@ -103,39 +76,40 @@ def freeze_sess_to_constant_pb(sess, export_path, export_name, as_text=False, ke
             if clear_devices:
                 for node in input_graph_def.node:
                     node.device = ""
+            output_names = [item.strip(':0') for item in output_names]
             frozen_graph = tf.graph_util.convert_variables_to_constants(
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
     try:
-        frozen_graph = _freeze_session(sess, keep_var_names, output_names, clear_devices)
-        tf.train.write_graph(frozen_graph, export_path, export_name+'.pb', as_text=as_text)
+        if output_node_names is None:
+            _, output_node_names = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
+        frozen_graph = _freeze_session(sess, keep_var_names, output_node_names, clear_devices)
+        if dump_result:
+            tf.io.write_graph(frozen_graph, '.', export_name+'.pb', as_text=as_text)
         return frozen_graph
     except Exception as e:
         print (e)
         return False
 
 
-def clean_graph_for_inference(graph, input_node_names, output_node_names):
+def clean_graph_for_inference(graph_or_graph_def, input_node_names, output_node_names):
     """
     trim useless and training-relative nodes for inference.
     do mind that it's merely about graph cleanness, not graph level optimization
-    :param graph: a constructed graph
+    :param graph_or_graph_def:
     :param input_node_names: name of input nodes, str or list
     :param output_node_names:
-    :return: a clean graph
+    :return: graph_def
     """
     from tensorflow.python.tools.optimize_for_inference_lib import optimize_for_inference
     # ================================ graph optimization ==================================
     input_node_names = [input_node_names] if type(input_node_names) is str else input_node_names
     output_node_names = [output_node_names] if type(output_node_names) is str else output_node_names
     placeholder_type_enum = tf.float32.as_datatype_enum
-    if 'GraphDef' not in str(type(graph)):
-        graph = graph.as_graph_def()
-    graph_def = optimize_for_inference(graph, input_node_names, output_node_names, placeholder_type_enum)
-    graph = tf.Graph()
-    with graph.as_default():
-        tf.import_graph_def(graph_def)
-    return graph
+    if 'GraphDef' not in str(type(graph_or_graph_def)):
+        graph_or_graph_def = graph_or_graph_def.as_graph_def()
+    graph_def = optimize_for_inference(graph_or_graph_def, input_node_names, output_node_names, placeholder_type_enum)
+    return graph_def
 
 
 def output_pb_to_tensorboard(pb_dir, log_dir):
@@ -156,7 +130,7 @@ def output_pb_to_tensorboard(pb_dir, log_dir):
         train_writer.add_graph(sess.graph)
 
 
-def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transforms=None):
+def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=None, transforms=None):
     """
     optimize graph for inference
         # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/tools/graph_transforms/README.md
@@ -173,7 +147,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
     from tensorflow.tools.graph_transforms import TransformGraph
     if transforms is None:
         transforms = [
-            # 'remove_nodes(op=Identity)',
+            'remove_nodes(op=Identity)',
             # 'merge_duplicate_nodes', # not good for visualization
             'strip_unused_nodes',
             # 'remove_attribute(attribute_name=_class)',
@@ -193,6 +167,8 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
         graph_def = read_pb(frozen_pb_or_graph_def)
     else:
         graph_def = frozen_pb_or_graph_def
+    if (input_names is None) and (output_names is None):
+        input_names, output_names = automatic_inputs_outputs_detect(graph_def)
     optimized_graph_def = TransformGraph(graph_def,
                                          input_names,
                                          output_names,
@@ -203,7 +179,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names, output_names, transf
 def automatic_inputs_outputs_detect(graph_def):
     """
     automatically detect inputs(nodes with op='Placeholder') and outputs(nodes without output edges) given a graph_def.
-    Place note that this is not 100% safe, might yield wrong inputs outputs detection, double check before carrying on
+    Place note that this is not 100% safe, might yield wrong result, double check before carrying on
     :param graph_def:
     :return: inputs(list), outputs(list)
     """
@@ -214,13 +190,13 @@ def automatic_inputs_outputs_detect(graph_def):
     for node in graph_def.node:
         node_inputs += node.input
         if node.op == 'Placeholder':
-            inputs.append(node.name)
+            inputs.append(node.name + ':0')
     # outputs detection
     node_inputs = list(set(node_inputs))
     for node in graph_def.node:
         if node.name not in node_inputs:
             if node.input:
-                outputs.append(node.name)
+                outputs.append(node.name + ':0')
     return inputs, outputs
 
 
