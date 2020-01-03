@@ -66,5 +66,3 @@ class MyLog(object):
             self.tb.send_message(chat_id, message, parse_mode='Markdown')
 
 
-if __name__ == '__main__':
-    logger = MyLog()

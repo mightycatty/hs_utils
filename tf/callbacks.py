@@ -7,6 +7,7 @@ import numpy as np
 from tensorflow.python.keras import backend as K
 from tensorflow.python.summary import summary as tf_summary
 import tensorflow as tf
+import logging
 
 
 class IntermediateOutputVisualization(Callback):
@@ -340,4 +341,59 @@ class TelegramBot(Callback):
             print('error with Telegram bot callback:{}'.format(e))
 
 
+class AbnormalWeightCheck(Callback):
+    """
+    raise warning if extreme weights are detected every n epoch.
+    result logged into a file named as the model
+    """
+    def __init__(self, log_dir,
+                 log_name=None,
+                 warning_threshold=1e5, # abs(value) > threshold
+                                        # or
+                                        # abs(value) < [1 / (threshold)]
+                 warning_factor=0., # mini fraction of abnormal values in a weight metric to raise warning
+                 epoch_step=1, # detection step/epoch
+                 verbose=True):
+        super(AbnormalWeightCheck, self).__init__()
+        self.log_dir = log_dir
+        self.epoch_step = epoch_step
+        self._verbose = verbose
+        self.warning_threshold = warning_threshold
+        self.warning_factor = warning_factor
+        self._init_logger(log_name)
+
+    def _init_logger(self, log_name):
+        if log_name is None:
+            log_name = self.model.name
+        self.logger = logging.getLogger(log_name)
+        logging_level = logging.INFO if self._verbose else logging.ERROR
+        self.logger.setLevel(logging_level)
+        self.log_file = log_name + '.log'
+        ch = logging.FileHandler(self.log_file)
+        ch.setLevel(logging_level)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        ch.setFormatter(formatter)
+        self.logger.addHandler(ch)
+
+    def weight_analyse(self):
+        """
+        detect weights with extreme value
+        :param model:
+        :return:
+        """
+        warning_dict = {}
+        for item in self.model.weights:
+            weights_value = K.get_value(item)
+            w_name = item.name
+            warning_flag = (np.sum(np.abs(weights_value) > self.warning_threshold) + \
+                           np.sum(np.abs(weights_value) < (1. / self.warning_threshold))) \
+                           > int(weights_value.size * self.warning_factor)
+            if warning_flag:
+                warning_dict[w_name] = weights_value
+        return warning_dict
+
+    def on_epoch_end(self, epoch, logs=None):
+        if epoch % self.epoch_step == 0:
+            warning_dict = self.weight_analyse()
+            self.logger.warning(warning_dict)
 
