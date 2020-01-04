@@ -1,5 +1,5 @@
 """
-custom layers and block built with tf.keras api
+custom layers and block built with tklib.keras api
 ** create a custom layer with Lamda to avoid the need to provide custom objects when loading model(seems that even with
 lamda to create a custom layer still yield error when loading model)
 """
@@ -179,7 +179,7 @@ def conv_bn(x, filters, kernel_size, strides=1, alpha=1, activation=True):
 
 def depthwiseConv_bn(x, depth_multiplier, kernel_size, strides=1, rate=1):
     """ Depthwise convolution
-    The  tf.keras.layers.DepthwiseConv2D is just the first step of the Depthwise Separable convolution (without the pointwise step).
+    The  tklib.keras.layers.DepthwiseConv2D is just the first step of the Depthwise Separable convolution (without the pointwise step).
     Depthwise Separable convolutions consists in performing just the first step in a depthwise spatial convolution
     (which acts on each input channel separately).
 
@@ -527,6 +527,7 @@ def resize_to_given_shape(inputs):
                            method=tf.image.ResizeMethod.BILINEAR,
                            align_corners=True)
     return x
+
 
 def h_swish(x):
     """

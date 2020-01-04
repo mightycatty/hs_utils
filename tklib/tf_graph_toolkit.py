@@ -26,7 +26,7 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
     usage sample:
         # 0. from graph obj
             # explicit batch size is require for a meaningful calculation under this circumstance
-            # input_tensor = tf.placeholder(shape=(1, h, w, c)) explicit batch size of 1
+            # input_tensor = tklib.placeholder(shape=(1, h, w, c)) explicit batch size of 1
             calculate_flops(graph)
         # 1. from pb file
             calculate_flops(pb, input_tensor_name='old_input_tensor_name:0', (1, 512, 512, 3))
@@ -51,11 +51,11 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
 def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, as_text=False, keep_var_names=None, clear_devices=True,
                                dump_result=False, *args, **kwargs):
     """
-     output a constant graph for inference and test from a active tf session
+     output a constant graph for inference and test from a active tklib session
     keep in mind that usually a session in tensorflow if full of duplicate and useless stuff, clean it up before export
     known bug:
         sometime frozen pb only consists of constant node without edges.
-    :param sess: activate tf session with graph and initialized variables
+    :param sess: activate tklib session with graph and initialized variables
     :param export_name: export name of the .pb file
     :param output_node_names: name of output nodes in graph, auto detect if none given(not 100% safe)
     :param as_text:
@@ -71,7 +71,7 @@ def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, a
         with graph.as_default():
             freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
             # output_names = output_names or []
-            # output_names = [v.op.name for v in tf.global_variables()] # not sure what this does
+            # output_names = [v.op.name for v in tklib.global_variables()] # not sure what this does
             input_graph_def = graph.as_graph_def()
             if clear_devices:
                 for node in input_graph_def.node:

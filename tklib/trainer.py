@@ -1,4 +1,4 @@
-# assert float(tf.__version__) >= 1.14, 'tensorflow version of over 1.14 is required for fully functional apis'
+# assert float(tklib.__version__) >= 1.14, 'tensorflow version of over 1.14 is required for fully functional apis'
 import os
 import warnings
 import tensorflow as tf

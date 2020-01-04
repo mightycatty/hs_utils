@@ -11,9 +11,9 @@ import os
 def input_fn_from_tfrecord(tfrecord_filenames_list, tf_example_parser_fn, batch_size=32, map_cores=4, augmentation=False,
                            aug_fn=None, debug=False, shuffle_flag=False, shuffle_buffer_size=1000, **kwargs):
     """
-    simple code pipeline for building input_fn consuming tf records
-    :param tfrecord_filenames_list: dir to a tf record of list of which
-    :param tf_example_parser_fn: fn for parse tf sample from tf record
+    simple code pipeline for building input_fn consuming tklib records
+    :param tfrecord_filenames_list: dir to a tklib record of list of which
+    :param tf_example_parser_fn: fn for parse tklib sample from tklib record
     :param batch_size: batch size
     :param map_cores: num of corse for parallism
     :param augmentation: augmentation flag
@@ -25,7 +25,7 @@ def input_fn_from_tfrecord(tfrecord_filenames_list, tf_example_parser_fn, batch_
     """
     if type(tfrecord_filenames_list) is str:
         tfrecord_filenames_list = [tfrecord_filenames_list]
-    # read data from tf record
+    # read data from tklib record
     num_parallel_reads = len(tfrecord_filenames_list)
     dataset = tf.data.TFRecordDataset(tfrecord_filenames_list, num_parallel_reads=num_parallel_reads,
                                       buffer_size=None)
@@ -59,7 +59,7 @@ class InputFnFromTFRecords:
         self._train_dataset_raw = self._dataset_raw.skip(val_num * len(self.tfrecords))
 
     def _read_tfrecords(self, num_parallel_reads=None, buffer_size=None, **kwargs):
-        # read data from tf record
+        # read data from tklib record
         num_parallel_reads = num_parallel_reads or len(self.tfrecords)
         self._dataset_raw = tf.data.TFRecordDataset(self.tfrecords, num_parallel_reads=num_parallel_reads,
                                                    buffer_size=buffer_size)
@@ -129,7 +129,7 @@ def test_single_frame():
 
 def parse_single_frame_tf_record(tf_records):
     """
-    parse tf records
+    parse tklib records
     :param tf_records:
     :return:
     usage sample:

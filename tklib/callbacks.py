@@ -2,12 +2,15 @@
 custom callbacks for tensorflow keras
 ready for model debug and testing
 """
+from __future__ import absolute_import
 from tensorflow.python.keras.callbacks import Callback
 import numpy as np
 from tensorflow.python.keras import backend as K
 from tensorflow.python.summary import summary as tf_summary
 import tensorflow as tf
 import logging
+from .tf_graph_toolkit import freeze_sess_to_constant_pb, graph_optimization
+import os
 
 
 class IntermediateOutputVisualization(Callback):
@@ -341,6 +344,7 @@ class TelegramBot(Callback):
             print('error with Telegram bot callback:{}'.format(e))
 
 
+#TODO: TO TEST
 class AbnormalWeightCheck(Callback):
     """
     raise warning if extreme weights are detected every n epoch.
@@ -397,3 +401,24 @@ class AbnormalWeightCheck(Callback):
             warning_dict = self.weight_analyse()
             self.logger.warning(warning_dict)
 
+
+#TODO: TO TEST
+class ExportFrozenPb(Callback):
+    """
+    export keras model to a frozen.pb for inference
+    """
+    def __init__(self, export_dir, export_step=100, verbose=True):
+        super(ExportFrozenPb, self).__init__()
+        self.export_dir = export_dir
+        self.step = export_step
+        self.verbose = verbose
+
+    def on_epoch_end(self, epoch, logs=None):
+        if epoch % self.step == 0:
+            sess = K.get_session()
+            graph = freeze_sess_to_constant_pb(sess, output_node_names=self.model.outputs)
+            graph = graph_optimization(graph, input_names=self.model.input, output_names=self.model.outputs)
+            save_name = self.model.name+'_epoch_{}'.format(epoch)
+            tf.io.write_graph(graph, self.export_dir, save_name)
+            if verbose:
+                print ('frozen pb saved to:{}'.format(os.path.join(self.export_dir, save_name)))
