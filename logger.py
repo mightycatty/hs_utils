@@ -1,6 +1,7 @@
 import logging
 import telebot
 from telebot import apihelper
+import os
 
 
 class MyLog(object):
@@ -8,11 +9,11 @@ class MyLog(object):
     requirement: telebot
         https://github.com/eternnoir/pyTelegramBotAPI
     """
-    def __init__(self, log_name='output', logging_level=logging.DEBUG, clean_format=True):
+    def __init__(self, log_name='output', log_dir='.', logging_level=logging.DEBUG, clean_format=True):
         # create logger
         self.logger = logging.getLogger(log_name)
         self.logger.setLevel(logging.DEBUG)
-        self.log_file = log_name + '.log'
+        self.log_file = os.path.join(log_dir, log_name + '.log')
         ch = logging.FileHandler(self.log_file)
         ch.setLevel(logging_level)
         if not clean_format:

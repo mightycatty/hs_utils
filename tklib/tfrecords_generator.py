@@ -1,5 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 import numpy as np
 import skimage.io as io
 from skimage.transform import rescale

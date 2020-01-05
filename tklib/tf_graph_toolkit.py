@@ -2,7 +2,7 @@
 tensorflow-graph toolkit
 """
 import tensorflow as tf
-
+from tensorflow.python.tools import freeze_graph
 
 def read_pb(graph_filepath):
     """
@@ -48,7 +48,7 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
     return flops.total_float_ops
 
 
-def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, as_text=False, keep_var_names=None, clear_devices=True,
+def freeze_sess_to_constant_pb(sess, export_name=None, input_node_names=None, output_node_names=None, as_text=False,
                                dump_result=False, *args, **kwargs):
     """
      output a constant graph for inference and test from a active tklib session
@@ -59,31 +59,32 @@ def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, a
     :param export_name: export name of the .pb file
     :param output_node_names: name of output nodes in graph, auto detect if none given(not 100% safe)
     :param as_text:
-    :param keep_var_names:
-    :param clear_devices:
     :param dump_result:
     :param args:
     :param kwargs:
     :return: frozen graph_def or False
     """
-    def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
+    def _freeze_session(session, keep_var_names=None, clear_devices=True):
         graph = session.graph
         with graph.as_default():
             freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
             # output_names = output_names or []
             # output_names = [v.op.name for v in tklib.global_variables()] # not sure what this does
             input_graph_def = graph.as_graph_def()
+            # input_graph_def = clean_graph_for_inference(input_graph_def, input_node_names[:1], output_node_names)
             if clear_devices:
                 for node in input_graph_def.node:
                     node.device = ""
-            output_names = [item.strip(':0') for item in output_names]
+            output_names = [item.strip(':0') for item in output_node_names]
             frozen_graph = tf.graph_util.convert_variables_to_constants(
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
     try:
         if output_node_names is None:
             _, output_node_names = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
-        frozen_graph = _freeze_session(sess, keep_var_names, output_node_names, clear_devices)
+        if input_node_names is None:
+            input_node_names, _ = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
+        frozen_graph = _freeze_session(sess)
         if dump_result:
             tf.io.write_graph(frozen_graph, '.', export_name+'.pb', as_text=as_text)
         return frozen_graph
@@ -105,6 +106,8 @@ def clean_graph_for_inference(graph_or_graph_def, input_node_names, output_node_
     # ================================ graph optimization ==================================
     input_node_names = [input_node_names] if type(input_node_names) is str else input_node_names
     output_node_names = [output_node_names] if type(output_node_names) is str else output_node_names
+    input_node_names = [item.strip(':0') for item in input_node_names]
+    output_node_names = [item.strip(':0') for item in output_node_names]
     placeholder_type_enum = tf.float32.as_datatype_enum
     if 'GraphDef' not in str(type(graph_or_graph_def)):
         graph_or_graph_def = graph_or_graph_def.as_graph_def()
@@ -207,6 +210,3 @@ def constant_folding(pb_or_graphdef=None):
     nodes = graph_def.node
     return graph_def
 
-
-if __name__ == '__main__':
-    constant_folding()

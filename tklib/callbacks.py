@@ -2,7 +2,7 @@
 custom callbacks for tensorflow keras
 ready for model debug and testing
 """
-from __future__ import absolute_import
+# from __future__ import absolute_import
 from tensorflow.python.keras.callbacks import Callback
 import numpy as np
 from tensorflow.python.keras import backend as K
@@ -95,8 +95,9 @@ class IntermediateOutputVisualization(Callback):
 
 class CustomModelCheckpoint(Callback):
   """
-  官方的checkpointcallback有一个问题就是会保存完整的图，如果多GPU训练就会保存多GPU图。此改正原API行为，
-  无论训练时是多gpu还是单GPU，保存时都为单GPU checkpoint, 且不保存opt:（include_optimizer=False）
+  modify the behavior of official checkpoint callback 
+  to save single-gpu model copy under multi-gpus training circumstance. 
+  Other behavior identical to official one
   """
   def __init__(self,
                filepath,
@@ -105,6 +106,7 @@ class CustomModelCheckpoint(Callback):
                save_best_only=False,
                save_weights_only=False,
                mode='auto',
+               include_optimizer=False,
                period=1):
     super(CustomModelCheckpoint, self).__init__()
     self.monitor = monitor
@@ -113,6 +115,7 @@ class CustomModelCheckpoint(Callback):
     self.save_best_only = save_best_only
     self.save_weights_only = save_weights_only
     self.period = period
+    self.include_opt = include_optimizer
     self.epochs_since_last_save = 0
 
     if mode not in ['auto', 'min', 'max']:
@@ -167,7 +170,8 @@ class CustomModelCheckpoint(Callback):
         if self.save_weights_only:
           model_s.save_weights(filepath, overwrite=True)
         else:
-          model_s.save(filepath, overwrite=True, include_optimizer=False)
+          model_s.save(filepath, overwrite=True, include_optimizer=self.include_opt
+                       )
 
 
 class CyclicLR(Callback):
@@ -325,7 +329,7 @@ class LogLearningRate(Callback):
 
 class TelegramBot(Callback):
     """
-     通过telegram bot监控训练进程
+     redirect training info to a telegram bot
      """
     def __init__(self, logger):
         super(TelegramBot, self).__init__()
@@ -344,7 +348,6 @@ class TelegramBot(Callback):
             print('error with Telegram bot callback:{}'.format(e))
 
 
-#TODO: TO TEST
 class AbnormalWeightCheck(Callback):
     """
     raise warning if extreme weights are detected every n epoch.
@@ -356,23 +359,25 @@ class AbnormalWeightCheck(Callback):
                                         # or
                                         # abs(value) < [1 / (threshold)]
                  warning_factor=0., # mini fraction of abnormal values in a weight metric to raise warning
-                 epoch_step=1, # detection step/epoch
+                 epoch_period=1, # detection step/epoch
                  verbose=True):
         super(AbnormalWeightCheck, self).__init__()
         self.log_dir = log_dir
-        self.epoch_step = epoch_step
+        self.epoch_period = epoch_period
         self._verbose = verbose
         self.warning_threshold = warning_threshold
         self.warning_factor = warning_factor
-        self._init_logger(log_name)
+        self.log_name = log_name
+        self.logger = None
 
-    def _init_logger(self, log_name):
-        if log_name is None:
-            log_name = self.model.name
-        self.logger = logging.getLogger(log_name)
+    def _init_logger(self):
+        if self.log_name is None:
+            self.log_name = self.model.name
+        self.logger = logging.getLogger(self.log_name)
         logging_level = logging.INFO if self._verbose else logging.ERROR
         self.logger.setLevel(logging_level)
-        self.log_file = log_name + '.log'
+        self.log_file = self.log_name + '_abnormal_weights.log'
+        self.log_file = os.path.join(self.log_dir, self.log_file)
         ch = logging.FileHandler(self.log_file)
         ch.setLevel(logging_level)
         formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -389,36 +394,48 @@ class AbnormalWeightCheck(Callback):
         for item in self.model.weights:
             weights_value = K.get_value(item)
             w_name = item.name
-            warning_flag = (np.sum(np.abs(weights_value) > self.warning_threshold) + \
-                           np.sum(np.abs(weights_value) < (1. / self.warning_threshold))) \
-                           > int(weights_value.size * self.warning_factor)
-            if warning_flag:
-                warning_dict[w_name] = weights_value
+            abnormal_factor = (np.sum(np.abs(weights_value) > self.warning_threshold) + \
+                           np.sum(np.abs(weights_value) < (1. / self.warning_threshold)))
+            if abnormal_factor > 0:
+                warning_dict[w_name] = abnormal_factor / float(weights_value.size)
         return warning_dict
 
     def on_epoch_end(self, epoch, logs=None):
-        if epoch % self.epoch_step == 0:
+        if self.logger is None:
+            self._init_logger()
+        if epoch % self.epoch_period == 0:
             warning_dict = self.weight_analyse()
             self.logger.warning(warning_dict)
 
 
-#TODO: TO TEST
+#TODO: bugs
 class ExportFrozenPb(Callback):
     """
     export keras model to a frozen.pb for inference
     """
-    def __init__(self, export_dir, export_step=100, verbose=True):
+    def __init__(self, export_dir,
+                 export_period=100,
+                 verbose=True):
         super(ExportFrozenPb, self).__init__()
         self.export_dir = export_dir
-        self.step = export_step
+        self.step = export_period
         self.verbose = verbose
 
     def on_epoch_end(self, epoch, logs=None):
         if epoch % self.step == 0:
-            sess = K.get_session()
-            graph = freeze_sess_to_constant_pb(sess, output_node_names=self.model.outputs)
-            graph = graph_optimization(graph, input_names=self.model.input, output_names=self.model.outputs)
-            save_name = self.model.name+'_epoch_{}'.format(epoch)
-            tf.io.write_graph(graph, self.export_dir, save_name)
-            if verbose:
-                print ('frozen pb saved to:{}'.format(os.path.join(self.export_dir, save_name)))
+            sess_or = K.get_session()
+            weights = self.model.get_weights()
+            with tf.Session().as_default() as sess:
+                K.set_session(sess)
+                K.set_learning_phase(0)
+                new_model = tf.keras.models.clone_model(self.model)
+                new_model.set_weights(weights)
+                input_names = [item.name for item in self.model.inputs]
+                output_names = [item.name for item in self.model.outputs]
+                graph = freeze_sess_to_constant_pb(sess, input_node_names=input_names, output_node_names=output_names)
+                graph = graph_optimization(graph, input_names=input_names, output_names=output_names)
+                save_name = self.model.name+'_epoch_{}'.format(epoch)
+                tf.io.write_graph(graph, self.export_dir, save_name)
+                if self.verbose:
+                    print ('frozen pb saved to:{}'.format(os.path.join(self.export_dir, save_name)))
+            K.set_session(sess_or)

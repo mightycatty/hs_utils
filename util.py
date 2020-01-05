@@ -1,5 +1,3 @@
-
-
 def run_command(cmd, verbose=False):
     """
     run commands , Linux only
@@ -87,7 +85,7 @@ def set_gpus_visiable(gpu_num=1, verbose=True):
         gpu_id_str = str(best_gpu)
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id_str
     if verbose:
-        print ('setting gpus:{}'.format(gpu_id_str))
+        print ('Using GPUs:{}'.format(gpu_id_str))
     return
 # ===============================================================================================================
 
