@@ -1,8 +1,11 @@
 """
 tensorflow-graph toolkit
 """
+import os
+
 import tensorflow as tf
-from tensorflow.python.tools import freeze_graph
+from tensorflow.python.keras import backend as K
+
 
 def read_pb(graph_filepath):
     """
@@ -16,8 +19,21 @@ def read_pb(graph_filepath):
             graph_def.ParseFromString(f.read())
             return graph_def
     except Exception as e:
-        print ('Pb reading error:{}').format(e)
+        print('Pb reading error:{}').format(e)
         return False
+
+
+def _freeze_session(session, output_node_names, keep_var_names=None, clear_devices=True):
+    graph = session.graph
+    with graph.as_default():
+        freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
+        input_graph_def = graph.as_graph_def()
+        if clear_devices:
+            for node in input_graph_def.node:
+                node.device = ""
+        frozen_graph = tf.graph_util.convert_variables_to_constants(
+            session, input_graph_def, output_node_names, freeze_var_names)
+        return frozen_graph
 
 
 def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
@@ -48,7 +64,7 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
     return flops.total_float_ops
 
 
-def freeze_sess_to_constant_pb(sess, export_name=None, input_node_names=None, output_node_names=None, as_text=False,
+def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, as_text=False,
                                dump_result=False, *args, **kwargs):
     """
      output a constant graph for inference and test from a active tklib session
@@ -57,39 +73,36 @@ def freeze_sess_to_constant_pb(sess, export_name=None, input_node_names=None, ou
         sometime frozen pb only consists of constant node without edges.
     :param sess: activate tklib session with graph and initialized variables
     :param export_name: export name of the .pb file
-    :param output_node_names: name of output nodes in graph, auto detect if none given(not 100% safe)
+    :param output_node_names: name of output nodes in graph, auto detect if none given(not 100% safe): node names, not tensor with ':0'
     :param as_text:
     :param dump_result:
     :param args:
     :param kwargs:
     :return: frozen graph_def or False
     """
+
     def _freeze_session(session, keep_var_names=None, clear_devices=True):
         graph = session.graph
         with graph.as_default():
             freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
-            # output_names = output_names or []
-            # output_names = [v.op.name for v in tklib.global_variables()] # not sure what this does
             input_graph_def = graph.as_graph_def()
-            # input_graph_def = clean_graph_for_inference(input_graph_def, input_node_names[:1], output_node_names)
             if clear_devices:
                 for node in input_graph_def.node:
                     node.device = ""
-            output_names = [item.strip(':0') for item in output_node_names]
             frozen_graph = tf.graph_util.convert_variables_to_constants(
-                session, input_graph_def, output_names, freeze_var_names)
+                session, input_graph_def, output_node_names, freeze_var_names)
             return frozen_graph
+
     try:
         if output_node_names is None:
             _, output_node_names = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
-        if input_node_names is None:
-            input_node_names, _ = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
+        output_node_names = [item.strip(':0') for item in output_node_names]
         frozen_graph = _freeze_session(sess)
         if dump_result:
-            tf.io.write_graph(frozen_graph, '.', export_name+'.pb', as_text=as_text)
+            tf.io.write_graph(frozen_graph, '.', export_name + '.pb', as_text=as_text)
         return frozen_graph
     except Exception as e:
-        print (e)
+        print(e)
         return False
 
 
@@ -203,10 +216,36 @@ def automatic_inputs_outputs_detect(graph_def):
     return inputs, outputs
 
 
+def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimize_graph=True, verbose=True):
+    sess_or = K.get_session()
+    weights = tk_model.get_weights()
+    with tf.Graph().as_default() as graph, tf.Session(graph=graph).as_default() as sess:
+        K.set_session(sess)
+        K.set_learning_phase(0)
+        new_model = tf.keras.models.clone_model(tk_model)
+        new_model.trainable = False
+        sess.run(tf.global_variables_initializer())
+        new_model.set_weights(weights)
+        input_names = [item.name for item in new_model.inputs]
+        output_names = [item.name for item in new_model.outputs]
+        graph = freeze_sess_to_constant_pb(sess, output_node_names=output_names)
+        if export_name:
+            export_name = export_name.strip('.pb')
+        else:
+            export_name = tk_model.name
+        tf.io.write_graph(graph, export_dir, export_name + '.pb', as_text=False)
+        if optimize_graph:
+            graph = graph_optimization(graph, input_names=input_names, output_names=output_names)
+            tf.io.write_graph(graph, export_dir, export_name + '.opt.pb')
+        if verbose:
+            print('frozen pb saved to:{}'.format(os.path.join(export_dir, export_name)))
+    K.set_session(sess_or)
+    return
+
+
 # TODO
 def constant_folding(pb_or_graphdef=None):
     pb_dir = 'F:\heshuai\proj\stylegan\deployment\encoder_fix.pb'
     graph_def = read_pb(pb_dir)
     nodes = graph_def.node
     return graph_def
-

@@ -2,21 +2,24 @@
 custom callbacks for tensorflow keras
 ready for model debug and testing
 """
+import logging
+import os
+
+import numpy as np
+import tensorflow as tf
+from tensorflow.python.keras import backend as K
 # from __future__ import absolute_import
 from tensorflow.python.keras.callbacks import Callback
-import numpy as np
-from tensorflow.python.keras import backend as K
 from tensorflow.python.summary import summary as tf_summary
-import tensorflow as tf
-import logging
-from .tf_graph_toolkit import freeze_sess_to_constant_pb, graph_optimization
-import os
+
+from .tf_graph_toolkit import freeze_keras_model_to_pb
 
 
 class IntermediateOutputVisualization(Callback):
     """
     将中间层结果可视化到tensorflow当中
     """
+
     def __init__(self,
                  x,
                  log_dir,
@@ -94,84 +97,85 @@ class IntermediateOutputVisualization(Callback):
 
 
 class CustomModelCheckpoint(Callback):
-  """
-  modify the behavior of official checkpoint callback 
-  to save single-gpu model copy under multi-gpus training circumstance. 
-  Other behavior identical to official one
-  """
-  def __init__(self,
-               filepath,
-               monitor='val_loss',
-               verbose=0,
-               save_best_only=False,
-               save_weights_only=False,
-               mode='auto',
-               include_optimizer=False,
-               period=1):
-    super(CustomModelCheckpoint, self).__init__()
-    self.monitor = monitor
-    self.verbose = verbose
-    self.filepath = filepath
-    self.save_best_only = save_best_only
-    self.save_weights_only = save_weights_only
-    self.period = period
-    self.include_opt = include_optimizer
-    self.epochs_since_last_save = 0
+    """
+    modify the behavior of official checkpoint callback
+    to save single-gpu model copy under multi-gpus training circumstance.
+    Other behavior identical to official one
+    """
 
-    if mode not in ['auto', 'min', 'max']:
-      mode = 'auto'
+    def __init__(self,
+                 filepath,
+                 monitor='val_loss',
+                 verbose=0,
+                 save_best_only=False,
+                 save_weights_only=False,
+                 mode='auto',
+                 include_optimizer=False,
+                 period=1):
+        super(CustomModelCheckpoint, self).__init__()
+        self.monitor = monitor
+        self.verbose = verbose
+        self.filepath = filepath
+        self.save_best_only = save_best_only
+        self.save_weights_only = save_weights_only
+        self.period = period
+        self.include_opt = include_optimizer
+        self.epochs_since_last_save = 0
 
-    if mode == 'min':
-      self.monitor_op = np.less
-      self.best = np.Inf
-    elif mode == 'max':
-      self.monitor_op = np.greater
-      self.best = -np.Inf
-    else:
-      if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
-        self.monitor_op = np.greater
-        self.best = -np.Inf
-      else:
-        self.monitor_op = np.less
-        self.best = np.Inf
+        if mode not in ['auto', 'min', 'max']:
+            mode = 'auto'
 
-  def on_epoch_end(self, epoch, logs=None):
-    try:
-        model_s = self.model.get_layer('model')
-    except ValueError:
-        model_s = self.model
-    logs = logs or {}
-    self.epochs_since_last_save += 1
-    if self.epochs_since_last_save >= self.period:
-      self.epochs_since_last_save = 0
-      filepath = self.filepath.format(epoch=epoch + 1, **logs)
-      if self.save_best_only:
-        current = logs.get(self.monitor)
-        if current is None:
-          pass
+        if mode == 'min':
+            self.monitor_op = np.less
+            self.best = np.Inf
+        elif mode == 'max':
+            self.monitor_op = np.greater
+            self.best = -np.Inf
         else:
-          if self.monitor_op(current, self.best):
-            if self.verbose > 0:
-              print('\nEpoch %05d: %s improved from %0.5f to %0.5f,'
-                    ' saving model to %s' % (epoch + 1, self.monitor, self.best,
-                                             current, filepath))
-            self.best = current
-            if self.save_weights_only:
-              model_s.save_weights(filepath, overwrite=True)
+            if 'acc' in self.monitor or self.monitor.startswith('fmeasure'):
+                self.monitor_op = np.greater
+                self.best = -np.Inf
             else:
-              model_s.save(filepath, overwrite=True, include_optimizer=False)
-          else:
-            if self.verbose > 0:
-              print('\nEpoch %05d: %s did not improve from %0.5f' %
-                    (epoch + 1, self.monitor, self.best))
-      else:
-        if self.verbose > 0:
-          print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
-        if self.save_weights_only:
-          model_s.save_weights(filepath, overwrite=True)
-        else:
-          model_s.save(filepath, overwrite=True, include_optimizer=self.include_opt
-                       )
+                self.monitor_op = np.less
+                self.best = np.Inf
+
+    def on_epoch_end(self, epoch, logs=None):
+        try:
+            model_s = self.model.get_layer('model')
+        except ValueError:
+            model_s = self.model
+        logs = logs or {}
+        self.epochs_since_last_save += 1
+        if self.epochs_since_last_save >= self.period:
+            self.epochs_since_last_save = 0
+            filepath = self.filepath.format(epoch=epoch + 1, **logs)
+            if self.save_best_only:
+                current = logs.get(self.monitor)
+                if current is None:
+                    pass
+                else:
+                    if self.monitor_op(current, self.best):
+                        if self.verbose > 0:
+                            print('\nEpoch %05d: %s improved from %0.5f to %0.5f,'
+                                  ' saving model to %s' % (epoch + 1, self.monitor, self.best,
+                                                           current, filepath))
+                        self.best = current
+                        if self.save_weights_only:
+                            model_s.save_weights(filepath, overwrite=True)
+                        else:
+                            model_s.save(filepath, overwrite=True, include_optimizer=False)
+                    else:
+                        if self.verbose > 0:
+                            print('\nEpoch %05d: %s did not improve from %0.5f' %
+                                  (epoch + 1, self.monitor, self.best))
+            else:
+                if self.verbose > 0:
+                    print('\nEpoch %05d: saving model to %s' % (epoch + 1, filepath))
+                if self.save_weights_only:
+                    model_s.save_weights(filepath, overwrite=True)
+                else:
+                    model_s.save(filepath, overwrite=True, include_optimizer=self.include_opt
+                                 )
 
 
 class CyclicLR(Callback):
@@ -235,6 +239,7 @@ class CyclicLR(Callback):
     reference:
     [1] https://github.com/bckenstler/CLR/blob/master/clr_callback.py
     """
+
     def __init__(self, base_lr=0.001, max_lr=0.006, step_size=2000., mode='triangular',
                  gamma=1., scale_fn=None, scale_mode='cycle'):
         super(CyclicLR, self).__init__()
@@ -309,28 +314,30 @@ class CyclicLR(Callback):
 
 
 class LogLearningRate(Callback):
-  """
-  每个epoch结束Log一下当前learning rate
-  """
-  def __init__(self, log_dir):
-      super(LogLearningRate, self).__init__()
-      self.log_dir = log_dir
-      self.writer = tf_summary.FileWriter(self.log_dir)
+    """
+    每个epoch结束Log一下当前learning rate
+    """
 
-  def on_epoch_end(self, epoch, logs=None):
-      summary = tf_summary.Summary()
-      summary_value = summary.value.add()
-      lr = float(tf.keras.backend.get_value(self.model.optimizer.lr))
-      summary_value.simple_value = lr
-      summary_value.tag = 'lr'
-      self.writer.add_summary(summary, epoch)
-      self.writer.flush()
+    def __init__(self, log_dir):
+        super(LogLearningRate, self).__init__()
+        self.log_dir = log_dir
+        self.writer = tf_summary.FileWriter(self.log_dir)
+
+    def on_epoch_end(self, epoch, logs=None):
+        summary = tf_summary.Summary()
+        summary_value = summary.value.add()
+        lr = float(tf.keras.backend.get_value(self.model.optimizer.lr))
+        summary_value.simple_value = lr
+        summary_value.tag = 'lr'
+        self.writer.add_summary(summary, epoch)
+        self.writer.flush()
 
 
 class TelegramBot(Callback):
     """
      redirect training info to a telegram bot
      """
+
     def __init__(self, logger):
         super(TelegramBot, self).__init__()
         self.logger = logger
@@ -342,7 +349,7 @@ class TelegramBot(Callback):
             for key, value in logs.items():
                 message += '{}:{}\n'.format(key, round(float(value), 2)).replace('_', '-')
             result = self.logger.fire_message_via_bot(message)
-            print (message)
+            print(message)
             print(result)
         except Exception as e:
             print('error with Telegram bot callback:{}'.format(e))
@@ -353,13 +360,14 @@ class AbnormalWeightCheck(Callback):
     raise warning if extreme weights are detected every n epoch.
     result logged into a file named as the model
     """
+
     def __init__(self, log_dir,
                  log_name=None,
-                 warning_threshold=1e5, # abs(value) > threshold
-                                        # or
-                                        # abs(value) < [1 / (threshold)]
-                 warning_factor=0., # mini fraction of abnormal values in a weight metric to raise warning
-                 epoch_period=1, # detection step/epoch
+                 warning_threshold=1e5,  # abs(value) > threshold
+                 # or
+                 # abs(value) < [1 / (threshold)]
+                 warning_factor=0.,  # mini fraction of abnormal values in a weight metric to raise warning
+                 epoch_period=10,  # detection step/epoch
                  verbose=True):
         super(AbnormalWeightCheck, self).__init__()
         self.log_dir = log_dir
@@ -395,7 +403,7 @@ class AbnormalWeightCheck(Callback):
             weights_value = K.get_value(item)
             w_name = item.name
             abnormal_factor = (np.sum(np.abs(weights_value) > self.warning_threshold) + \
-                           np.sum(np.abs(weights_value) < (1. / self.warning_threshold)))
+                               np.sum(np.abs(weights_value) < (1. / self.warning_threshold)))
             if abnormal_factor > 0:
                 warning_dict[w_name] = abnormal_factor / float(weights_value.size)
         return warning_dict
@@ -408,34 +416,26 @@ class AbnormalWeightCheck(Callback):
             self.logger.warning(warning_dict)
 
 
-#TODO: bugs
 class ExportFrozenPb(Callback):
     """
     export keras model to a frozen.pb for inference
     """
+
     def __init__(self, export_dir,
                  export_period=100,
+                 optimize_graph=True,
                  verbose=True):
         super(ExportFrozenPb, self).__init__()
         self.export_dir = export_dir
+        self.opt_graph = optimize_graph
         self.step = export_period
         self.verbose = verbose
 
     def on_epoch_end(self, epoch, logs=None):
         if epoch % self.step == 0:
-            sess_or = K.get_session()
-            weights = self.model.get_weights()
-            with tf.Session().as_default() as sess:
-                K.set_session(sess)
-                K.set_learning_phase(0)
-                new_model = tf.keras.models.clone_model(self.model)
-                new_model.set_weights(weights)
-                input_names = [item.name for item in self.model.inputs]
-                output_names = [item.name for item in self.model.outputs]
-                graph = freeze_sess_to_constant_pb(sess, input_node_names=input_names, output_node_names=output_names)
-                graph = graph_optimization(graph, input_names=input_names, output_names=output_names)
-                save_name = self.model.name+'_epoch_{}'.format(epoch)
-                tf.io.write_graph(graph, self.export_dir, save_name)
-                if self.verbose:
-                    print ('frozen pb saved to:{}'.format(os.path.join(self.export_dir, save_name)))
-            K.set_session(sess_or)
+            try:
+                model_s = self.model.get_layer('model')  # extract single gpu model copy
+            except ValueError:
+                model_s = self.model
+            export_name = model_s + '_epoch_{}'.format(epoch)
+            freeze_keras_model_to_pb(model_s, self.export_dir, export_name, self.opt_graph, self.verbose)
