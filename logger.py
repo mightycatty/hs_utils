@@ -9,8 +9,10 @@ class MyLog(object):
     requirement: telebot
         https://github.com/eternnoir/pyTelegramBotAPI
     """
-    def __init__(self, log_name='output', log_dir='.', logging_level=logging.DEBUG, clean_format=True):
+    def __init__(self, log_name=None, log_dir='.', logging_level=logging.DEBUG, clean_format=True, clear_file=False):
         # create logger
+        if log_name is None:
+            log_name = __name__
         self.logger = logging.getLogger(log_name)
         self.logger.setLevel(logging.DEBUG)
         self.log_file = os.path.join(log_dir, log_name + '.log')
@@ -22,6 +24,8 @@ class MyLog(object):
             formatter = logging.Formatter('%(message)s')
         ch.setFormatter(formatter)
         self.logger.addHandler(ch)
+        if clear_file:
+            self.clear_logfile()
         self.tb = None
 
     def telegram_bot_init(self, token=None):

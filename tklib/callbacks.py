@@ -437,5 +437,5 @@ class ExportFrozenPb(Callback):
                 model_s = self.model.get_layer('model')  # extract single gpu model copy
             except ValueError:
                 model_s = self.model
-            export_name = model_s + '_epoch_{}'.format(epoch)
+            export_name = model_s.name + '_epoch_{}'.format(epoch)
             freeze_keras_model_to_pb(model_s, self.export_dir, export_name, self.opt_graph, self.verbose)
