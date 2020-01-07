@@ -216,7 +216,19 @@ def automatic_inputs_outputs_detect(graph_def):
     return inputs, outputs
 
 
+# TODO: BUG, AVOID TO USE, use freeze_kears_model_to_pb_from_model_fn() instead
 def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimize_graph=True, verbose=True):
+    """
+    not safe
+    Known issue:
+         run into 'SystemError: unknown opcode' if your keras model contains lambda layers
+    :param tk_model:
+    :param export_dir:
+    :param export_name:
+    :param optimize_graph:
+    :param verbose:
+    :return:
+    """
     sess_or = K.get_session()
     weights = tk_model.get_weights()
     with tf.Graph().as_default() as graph, tf.Session(graph=graph).as_default() as sess:
@@ -243,8 +255,67 @@ def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimiz
     return
 
 
+# TODO: code stylish
+def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name, graph_optimize=True,
+                                           export_tf_lite=False):
+    """
+    由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
+    注意：该方法导出的pb会多一个import前缀，如keras model下op名字为input, 则pb中为import/input:0
+    :param model_with_weights:
+    :param export_path:
+    :param export_name:
+    :return:
+    """
+
+    def _model_wrapper(model_fn, input_shape, model_name):
+        input_tensor = tf.keras.layers.Input(input_shape, name='input')
+        segmentation_output = model_fn(input_tensor)
+        model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name)
+        return model
+
+    def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
+        graph = session.graph
+        with graph.as_default():
+            freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
+            output_names = output_names or []
+            output_names += [v.op.name for v in tf.global_variables()]
+            input_graph_def = graph.as_graph_def()
+            if clear_devices:
+                for node in input_graph_def.node:
+                    node.device = ""
+            frozen_graph = tf.graph_util.convert_variables_to_constants(
+                session, input_graph_def, output_names, freeze_var_names)
+            return frozen_graph
+
+    K.clear_session()
+    K.set_learning_phase(0)  # all new operations will be in test mode from now on,
+                            # which is crucial for converting to tflite and a frozen pb
+    model = _model_wrapper(model_fn, input_shape, export_name)
+    if weight_path and os.path.exists(weight_path):
+        model.load_weights(weight_path)
+    with K.get_session() as sess:
+        frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
+        tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)
+        if graph_optimize:
+            frozen_graph = graph_optimization(frozen_graph)
+            tf.io.write_graph(frozen_graph, export_path, export_name + '_opt.pb', as_text=False)
+        # convert to tflite
+        if export_tf_lite:
+            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs, model.outputs)
+            tflite_model = converter.convert()
+            save_dir = os.path.join(export_path, export_name+'.tflite')
+            with open(save_dir, 'wb') as f:
+                f.write(tflite_model)
+        return frozen_graph
+
+
 # TODO
 def constant_folding(pb_or_graphdef=None):
+    """
+    tf graph transform does incomplete constant folding
+    :param pb_or_graphdef:
+    :return:
+    """
     pb_dir = 'F:\heshuai\proj\stylegan\deployment\encoder_fix.pb'
     graph_def = read_pb(pb_dir)
     nodes = graph_def.node
