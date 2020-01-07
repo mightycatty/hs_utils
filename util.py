@@ -67,8 +67,15 @@ def gpu_memory_map(verbose=False):
 def pick_n_gpu_lowest_memory(n=1):
     """Returns GPU with the least allocated memory"""
     memory_gpu_map = [(memory, gpu_id) for (gpu_id, memory) in gpu_memory_map().items()]
-    best_gpu = [item[1] for item in sorted(memory_gpu_map)[:n]]
-    return best_gpu
+    best_gpu = []
+    for item in sorted(memory_gpu_map)[:n]:
+        if item[0] < 500: # 500MB
+            best_gpu.append(item[1])
+    if len(best_gpu) == n:
+        return best_gpu
+    else:
+        print ('not enough gpus available')
+        exit(0)
 
 
 def set_gpus_visiable(gpu_num=1, verbose=True):

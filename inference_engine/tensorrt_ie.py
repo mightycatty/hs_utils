@@ -1,46 +1,76 @@
 """freestanding testing scrip for style-gan encoder and generator with trt backend
-requirement: trt 7.0
+
+tested on tensorrt 7.0.0, might run into issue under other versions.
+
+Known issue:
+    1. tensorrt 6.0 onnx parser works with opset<=7
+    2. tensorrt 7.0.0 conv2d_transpose is broken(output is different from tf/onnx)
+    3. tensorrt 7.0.0 onnx int8-calibrator is broken
+    4. transpose is broken(data is transposed while shape is kept)
+    5. tensorrt 7.0.0 onnx parser only works with networks with explicit batch dim
+    6. resize is still not supported for uff parser in tensorrt 7.0.0(though it's claimed)
 """
 import warnings
-
-
 warnings.simplefilter(action='ignore', category=FutureWarning) # disable nasty future warning in tensorflow and numpy
+
 import os
-# TODO: run/debug with remote interpreter might encounter .so-not-found error.
-#  Adding *TensorRT*/lib to environ path in pycharm fixes this issue
-# LD_LIBRARY_PATH=/home/heshuai/TensorRT-7.0.0.11/lib # /home/heshuai/application/TensorRT-7.0.0.11/lib
-# print (os.environ)
 import tensorrt as trt
 import logging
 import uff
 import numpy as np
 import pycuda.driver as cuda
-
-TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE) # global trt logger setting
-from PIL.Image import open as img_open
-import cv2
-import time
+import pycuda.autoinit
+import sys
 
 
-def _exception_logger_wrapper(func):
-    from functools import wraps
-    import logging
-    @wraps(func)
-    def newfunc(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            logging.error(e)
-            return False
-    return newfunc
+logging.basicConfig(level=logging.DEBUG,
+                    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S")
+logger = logging.getLogger(__name__)
+TRT_LOGGER = trt.Logger(trt.Logger.ERROR) # global trt logger setting
 
 
 class TensorrtBuilder:
-    EXPLICIT_BATCH = 1 << (int)(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+
+    @staticmethod
+    def item_to_list(item):
+        if not isinstance(item, list):
+            if item:
+                item = [item]
+        return item
 
     @staticmethod
     def GiB(val):
         return val * 1 << 30
+
+    @staticmethod
+    def create_optimization_profile(builder, config, input_name, input_shape, batch_size=None):
+        """
+        required for mode with dynamic shape, call build_engine(network, config) instead of build_cuda_engine(network)
+        :param builder:
+        :param config:
+        :param input_name: name of input nodes
+        :param input_shape: ignore batch dim if batch_size is None
+        :param batch_size: none for explict batch dim network
+        :return: None, alteration is done to 'config' obj
+        """
+        profile = builder.create_optimization_profile()
+        # Fixed explicit batch in input shape
+        if batch_size is None:
+            batch_size = input_shape[0]
+            shape = input_shape[1:]
+        # Dynamic explicit batch
+        elif input_shape[0] == -1:
+            shape = input_shape[1:]
+        # Implicit Batch
+        else:
+            shape = input_shape
+
+        min_batch = batch_size
+        opt_batch = batch_size
+        max_batch = batch_size
+        profile.set_shape(input_name, min=(min_batch, *shape), opt=(opt_batch, *shape), max=(max_batch, *shape))
+        config.add_optimization_profile(profile)
 
     @staticmethod
     def save_engine(engine, dump_name) -> bool:
@@ -57,124 +87,161 @@ class TensorrtBuilder:
         engine = trt_runtime.deserialize_cuda_engine(engine_data)
         return engine
 
-    # deprecated
     @staticmethod
-    def build_engine_from_tf_pb_or_uff(model_file, input_node_names, input_node_shapes, output_node_names,
-                                       dump_result=True,
-                                       uff_text=False, uff_debug=False, max_batch_size=1, max_workspace_size=GiB(1),
-                                       debug_sync=True, fp16_mode=True):
-        """
-         build TRT engine from a frozen tensorflow .pb model or a scrip-converted uff model.
-        reminder: prefixes and suffixes are not required
-            eg： input_node_names = 'import/encoder_input:0'         X
-                input_node_names = 'encoder_input'                   √
-        :param model_file:
-        :param input_node_names:
-        :param input_node_shapes:
-        :param output_node_names:
-        :param dump_result:
-        :param uff_text:
-        :param uff_debug:
-        :param max_batch_size:
-        :param max_workspace_size:
-        :param debug_sync:
-        :param min_find_iterations:
-        :param average_find_iterations:
-        :param fp16_mode:
-        :return:
-        """
-        name, model_type = tuple(os.path.splitext(model_file))
-        supported_type_list = ['.pb', '.uff']
-        assert model_type in supported_type_list, 'support model list:{}'.format(supported_type_list)
-        # wrap input and output kwargs to list for universal multi-nodes engine building
-        if isinstance(input_node_names, str):
-            input_node_names = [input_node_names]
-            input_node_shapes = [input_node_shapes]
-        output_node_names = [output_node_names] if isinstance(output_node_names, str) else output_node_names
-        output_node_names = [output_node_names] if isinstance(output_node_names, str) else output_node_names
-        # convert pb model to uff
-        if model_type == '.pb':
-            uff_buffer = uff.from_tensorflow_frozen_model(frozen_file=model_file, output_nodes=output_node_names,
-                                                          output_filename=name + '.uff', text=uff_text,
-                                                          debug_mode=uff_debug)
-        # initialization
-        builder = trt.Builder(TRT_LOGGER)
-        network = builder.create_network()
+    def _build_engine(network,
+                      builder,
+                      explicit_batch_dim=False,
+                      max_batch_size=1,
+                      max_workspace_size=1 << 30,
+                      mix_precision='fp16',
+                      calib=None):
+        # dynamic shape building config with explict_batch_size = True
+        if explicit_batch_dim:
+            config = builder.create_builder_config()
+            config.max_workspace_size = max_workspace_size
+            if mix_precision == 'int8':
+                config.set_flag(trt.BuilderFlag.INT8)
+                config.int8_calibrator = calib
+            if mix_precision == 'fp16':
+                config.set_flag(trt.BuilderFlag.FP16)
+            input_shape = network.get_input(0).shape
+            input_name = network.get_input(0).name
+            TensorrtBuilder.create_optimization_profile(builder, config, input_name, input_shape, None)
+            built_engine = builder.build_engine(network, config)
+        else:
+            builder.max_batch_size = max_batch_size
+            builder.max_workspace_size = max_workspace_size
+            if mix_precision == 'fp16':
+                builder.fp16_mode = True
+            if mix_precision == 'int8':
+                builder.int8_mode = True
+                builder.int8_calibrator = calib
+            built_engine = builder.build_cuda_engine(network)
+        return built_engine
+
+    @staticmethod
+    def _pb_uff_parser(pb_dir,
+                       network,
+                       input_node_names,
+                       input_node_shapes,
+                       output_node_names):
         parser = trt.UffParser()
         # parse network
         for input_node_name, input_node_shape in zip(input_node_names, input_node_shapes):
             parser.register_input(input_node_name, input_node_shape)
         for output_node_name in output_node_names:
             parser.register_output(output_node_name)
-        if model_type == '.pb':
-            parser.parse_buffer(uff_buffer, network)
-        else:
-            parser.parse(model_type, network)
-        # build engine
-        builder.max_batch_size = max_batch_size
-        builder.max_workspace_size = max_workspace_size
-        builder.debug_sync = debug_sync
-        builder.fp16_mode = fp16_mode
-        built_engine = builder.build_cuda_engine(network)
-        if built_engine:
-            if dump_result:
-                TensorrtBuilder.save_engine(built_engine, name)
-            return built_engine
-        else:
-            logging.error('fail to build engine')
-            return False
+        uff_buffer = uff.from_tensorflow_frozen_model(frozen_file=pb_dir, output_nodes=output_node_names,
+                                                      output_filename='buffer.uff', text=False,
+                                                      debug_mode=True)
+        parser.parse_buffer(uff_buffer, network)
+        os.remove('buffer.uff')
+        return network
 
     @staticmethod
-    def build_engine_from_onnx(model_file,
-                               dump_result=True,
-                               max_batch_size=1,
-                               max_workspace_size=GiB(1),
-                               debug_sync=True,
-                               mixed_precision_mode='float16',
-                               explicit_batch_size=False,
-                               calib=None,
-                               **kwargs):
-        """
-        trt requirement 7.0
-        :param model_file:
-        :param dump_result:
-        :param max_batch_size:
-        :param max_workspace_size:
-        :param debug_sync:
-        :param fp16_mode:
-        :param kwargs:
-        :return:
-        """
-        valid_mixed_precision = ['float32', 'float16', 'int8']
-        assert mixed_precision_mode in valid_mixed_precision, 'mixed precision is invalid:{}/{}'.\
-            format(mixed_precision_mode, valid_mixed_precision)
-
-        name, model_type = tuple(os.path.splitext(model_file))
-        # initialization
-        # TODO: BUG, onnx parser fails to parse the model(converted from tf1.14, opset=9) with implicit batch size
-        with trt.Builder(TRT_LOGGER) as builder, builder.create_network(TensorrtBuilder.EXPLICIT_BATCH) as network, \
-                trt.OnnxParser(network, TRT_LOGGER) as parser:
-            with open(model_file, 'rb') as model:
-                parser.parse(model.read())
-                # for i in range(100): # extract error message
-                #     print (parser.get_error(i))
-            # builder.max_batch_size = max_batch_size
-            builder.max_workspace_size = max_workspace_size
-            builder.debug_sync = debug_sync
-            if mixed_precision_mode == 'int8':
+    def build_engine_from_pb_or_onnx(model_file,
+                                input_node_names=None,
+                                input_node_shapes=None,
+                                output_node_names=None,
+                                explicit_batch_dim=False,
+                                max_batch_size=1,
+                                max_workspace_size=1 << 30,
+                                mix_precision='fp16',
+                                calib=None):
+        def _assertion():
+            name, model_type = tuple(os.path.splitext(model_file))
+            assert model_type in ['.pb', '.onnx'], 'invalid model format:{}/(pb-onnx)'.format(model_type)
+            if model_type == '.pb':
+                assert input_node_names and input_node_shapes and output_node_names, \
+                    'input nodes names/shapes and output names are required for parsing .pb'
+            assert mix_precision in ['fp16', 'fp32', 'int8'], 'invalid mix precision"{}/{}'. \
+                format(mix_precision, ['fp16', 'fp32', 'int8'])
+            if mix_precision == 'int8':
                 assert calib is not None, 'calibrator is required for int8 mode'
-                builder.int8_mode = True
-                builder.int8_calibrator = calib
-            if mixed_precision_mode == 'float16':
-                builder.fp16_mode = True
-            built_engine = builder.build_cuda_engine(network)
-            if built_engine:
-                if dump_result:
-                    TensorrtBuilder.save_engine(built_engine, name)
-                return built_engine
-            else:
-                logging.error('fail to build engine')
-                return False
+
+        _assertion()
+
+        logger.info('building engine from:{}'.format(model_file))
+        logger.info('explict batch dim:{}'.format(explicit_batch_dim))
+        name, model_type = tuple(os.path.splitext(model_file))
+        # initialize builder
+        builder = trt.Builder(TRT_LOGGER)
+        network_flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH) if explicit_batch_dim else 0
+        network = builder.create_network(network_flag)
+        # parse network
+        if model_type == '.pb':
+            input_node_names = TensorrtBuilder.item_to_list(input_node_names)
+            output_node_names = TensorrtBuilder.item_to_list(output_node_names)
+            network = TensorrtBuilder._pb_uff_parser(model_type, network, input_node_names, input_node_shapes,
+                                                     output_node_names)
+        else:
+            parser = trt.OnnxParser(network, TRT_LOGGER)
+            with open(model_file, 'rb') as model:
+                if not parser.parse(model.read()):
+                    logger.error('ERROR: Failed to parse the ONNX file: {}'.format(model_file))
+                    for error in range(parser.num_errors):
+                        logger.error(parser.get_error(error))
+                    sys.exit(1)
+        # build engine
+        built_engine = TensorrtBuilder._build_engine(network, builder, explicit_batch_dim, max_batch_size, max_workspace_size,
+                                      mix_precision, calib)
+        if built_engine:
+            logger.info('engine built!')
+            TensorrtBuilder.save_engine(built_engine, name)
+            return built_engine
+        else:
+            logger.error('fail to build engine!')
+            return False
+
+
+class EncoderEntropyCalibrator(trt.IInt8EntropyCalibrator2):
+    """
+    simple calibrator passed to builder for buiding a int8 engine.
+    """
+    def __init__(self, data_gen, # a python generator, each yield return a batch of x(N, C)/ (y is not required)
+                 cache_file, # calibrator cache file name, str
+                 batch_size=8,
+                 input_shape_wo_batch_dim=(4, 1024, 1024)):
+        # Whenever you specify a custom constructor for a TensorRT class,
+        # you MUST call the constructor of the parent explicitly.
+        trt.IInt8EntropyCalibrator2.__init__(self)
+
+        self.cache_file = cache_file
+        self.batch_size = batch_size
+        self.data_gen = data_gen
+        # Allocate enough memory for a whole batch.
+        self.device_input = cuda.mem_alloc(np.ones((batch_size, *input_shape_wo_batch_dim), dtype=np.float32).nbytes)
+        self.batch_count = 0
+        self.input_shape = input_shape_wo_batch_dim
+
+    def get_batch_size(self):
+        return self.batch_size
+
+    def get_batch(self, names):
+        try:
+            batch_data = next(self.data_gen)
+            assert batch_data.shape == (self.batch_size, *self.input_shape), 'date batch size is invalid'
+            cuda.memcpy_htod(self.device_input, batch_data.ravel())
+            # if self.batch_count % 1 == 0:
+            logger.info("Calibrating batch {:}, containing {:} images".format(self.batch_count, self.batch_size))
+            self.batch_count += 1
+            return [int(self.device_input)]
+        except StopIteration:
+            return None
+
+    def read_calibration_cache(self):
+        # If there is a cache, use it instead of calibrating again. Otherwise, implicitly return None.
+        if os.path.exists(self.cache_file):
+            logger.info('calibrate cache found')
+            with open(self.cache_file, "rb") as f:
+                return f.read()
+        else:
+            logger.info('no calibrate cache found')
+            return
+
+    def write_calibration_cache(self, cache):
+        with open(self.cache_file, "wb") as f:
+            f.write(cache)
 
 
 class InferenceWithTensorRT:
@@ -203,7 +270,7 @@ class InferenceWithTensorRT:
             if model_type == '.onnx':
                 build_fn = TensorrtBuilder.build_engine_from_onnx
             else:
-                build_fn = TensorrtBuilder.build_engine_from_tf_pb_or_uff
+                build_fn = TensorrtBuilder.build_engine_from_tf_pb
             self.trt_engine = build_fn(self.model_dir, **self.kwargs)
         else:
             print ('loading built engine:{}...'.format(engine_file))
@@ -220,10 +287,12 @@ class InferenceWithTensorRT:
         self.cuda_input = cuda.mem_alloc(self.host_input.nbytes)
         self.cuda_output = cuda.mem_alloc(self.host_output.nbytes)
         self.context = self.trt_engine.create_execution_context()
+        self.context.active_optimization_profile = 0
         self.stream = cuda.Stream()
 
     def predict(self, input_data):
         """
+        predict with async api
         data -> cpu -> GPU -> cpu
         :param input_data:
         :param kwargs:
@@ -236,10 +305,7 @@ class InferenceWithTensorRT:
                             .format(str(input_data.dtype), self.input_dtype.__name__))
             input_data = self.input_dtype(input_data)
         # input data -> cpu
-        import time
-        time_be = time.time()
         np.copyto(self.host_input, input_data.ravel())
-        print (time.time() - time_be)
         # cpu -> gpu
         cuda.memcpy_htod_async(self.cuda_input, self.host_input, self.stream)
         # Run inference. difference execution api by the way the engine built(implicit/explicit batch size)
@@ -256,190 +322,4 @@ class InferenceWithTensorRT:
             output = self.post_processing_fn(output)
         # Return the host output.
         return output
-
-
-class EncoderInferenceWithTensorRT(InferenceWithTensorRT):
-    @staticmethod
-    def _load_image(path):
-        assert os.path.exists(path)
-        image = img_open(path)
-        # image = np.transpose(image, [2, 0, 1])
-        image_arrays = np.expand_dims(np.array(image), axis=0)
-        return image_arrays
-
-    def predict(self, input_data):
-        if isinstance(input_data, str):
-            input_data = InferenceWithTensorRT._load_image(input_data)
-        result = super(EncoderInferenceWithTensorRT, self).predict(input_data)
-        result_tf = np.load('./mini_inference/latents_or.npy').flatten()
-        return result
-
-
-class GeneratorInferenceWithTensorRT(InferenceWithTensorRT):
-    @staticmethod
-    def duplicate_reshape_latents(latents, latent_size=512, n=18):
-        """ duplicate the last `latent_size` values of `latents`.
-        :param latents: shape[N, latent_size*9]
-        :param latent_size: default 512
-        :param n: default 18
-        :param np_format: return numpy format or not
-        :return: shape[N, latent_size*18]
-        """
-        latents = np.expand_dims(latents, axis=0)
-        s = latents.shape
-        last_latent_duplicated = np.tile(latents[:, -1 * latent_size:], [1, n - int(s[1] / latent_size)])
-        latents_duplicated = np.concatenate((latents, last_latent_duplicated), axis=1)
-        return latents_duplicated.reshape((s[0], n, latent_size))
-
-    @staticmethod
-    def _saturate_cast(x, drange=[0, 255]):
-        x[x > drange[-1]] = drange[-1]
-        x[x < drange[0]] = drange[0]
-        x = np.uint8(x)
-        x = x.reshape((1024, 1024, 3))
-        return x
-
-    def predict(self, input_data):
-        input_data = GeneratorInferenceWithTensorRT.duplicate_reshape_latents(input_data)
-        input_data = np.expand_dims(input_data, axis=0)
-        result = super(GeneratorInferenceWithTensorRT, self).predict(input_data)
-        result_tf = np.load('./mini_inference/img_or.npy').flatten()
-        result = GeneratorInferenceWithTensorRT._saturate_cast(result)
-        return result
-
-
-def inference_performance_eval():
-    """
-    inference performance evaluation of encoder and generator regardless of pre-post processing
-    :return:
-    """
-    ie_encoder = InferenceWithTensorRT(**build_encoder_kwargs)
-    ie_generator = InferenceWithTensorRT(**build_generator_kwargs)
-    encoder_input = np.random.randn(1024, 1024, 4).astype(np.float32)
-    generator_input = np.random.randn(1, 18, 512).astype(np.float32)
-    # warming up
-    iterations = 5
-    for _ in range(iterations):
-        _ = ie_encoder.predict(encoder_input)
-        _ = ie_generator.predict(generator_input)
-
-    # performance eval
-    print ('performance evaluating...')
-    iterations = 1000
-    time_be = time.time()
-    for _ in range(iterations):
-        _ = ie_encoder.predict(encoder_input)
-    duration = time.time() - time_be
-    print('infer time for encoder:{}'.format(duration / iterations))
-
-    iterations = 1000
-    time_be = time.time()
-    for _ in range(iterations):
-        _ = ie_generator.predict(generator_input)
-    duration = time.time() - time_be
-    print('infer time for generator:{}'.format(duration / iterations))
-
-
-def naive_pipeline():
-    """
-    naive implementation of encoder-generator pipeline
-    :return:
-    """
-    ie_encoder = EncoderInferenceWithTensorRT(**build_encoder_kwargs)
-    ie_generator = GeneratorInferenceWithTensorRT(**build_generator_kwargs)
-    test_img_dir = 'test.png'
-    image = EncoderInferenceWithTensorRT._load_image(test_img_dir)
-    dlatent = ie_encoder.predict(image)
-    generated_img = ie_generator.predict(dlatent)
-    cv2.imwrite('generated_img.png', generated_img)
-
-
-def generator_test():
-    # tensorflow
-    from tensorflow_ie import InferenceWithPb
-    model_dir = './models/full/generator_fix.opt.pb'
-    output_node = 'generator_fix/64x64/Conv1/StyleMod/add_2:0'
-    # output_node = 'generator_fix/128x128/Conv0_up/conv2d_transpose:0' #1094.263/-847.3358 vs 1094.2634/-847.3362 (trt)
-    # output_node = 'generator_fix/128x128/Conv0_up/Noise/add:0' # 1077.1605/-809.32776 vs 1072.5453/-809.6483
-    # output_node = 'generator_fix/128x128/Conv0_up/BiasAdd:0' # 1079.3948/-827.94403 vs 1074.3948/-827.94403
-    # output_node = 'generator_fix/images_out:0'
-    ie = InferenceWithPb(model_dir)
-    input_data = np.ones((1, 1, 18, 512)).astype(np.float32)
-    result = ie.predict(input_data, output_nodes=output_node)
-    tf_result = np.squeeze(result)
-
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    ie = InferenceWithTensorRT(**build_generator_kwargs)
-    input_data = np.ones((1, 1, 18, 512)).astype(np.float32)
-    result = ie.predict(input_data)
-    print (result.shape)
-    result = np.squeeze(result)
-    print (result.max())
-    print (result.min())
-    result = np.reshape(result, tf_result.shape)
-    diff_or = tf_result - result
-
-    diff = np.mean(diff_or, axis=0)
-    f = plt.figure(figsize=(10, 10))
-    ax = f.add_subplot(321)
-    sns.distplot(diff.flatten(), ax=ax)
-    ax = f.add_subplot(322)
-    sns.heatmap(diff, xticklabels=False, yticklabels=False, ax=ax)
-
-    diff = np.sum(diff_or, axis=0)
-    ax = f.add_subplot(323)
-    sns.distplot(diff.flatten(), ax=ax)
-    ax = f.add_subplot(324)
-    sns.heatmap(diff, xticklabels=False, yticklabels=False, ax=ax)
-
-    diff = np.sum(diff_or / result, axis=0)
-    ax = f.add_subplot(325)
-    sns.distplot(diff.flatten(), ax=ax)
-    ax = f.add_subplot(326)
-    sns.heatmap(diff, xticklabels=False, yticklabels=False, ax=ax)
-
-    save_name = '{}.png'.format(output_node.replace('/', '_'))
-    plt.savefig(save_name)
-    plt.close('all')
-    plt.cla()
-    plt.clf()
-    return result
-
-
-def encoder_output_check():
-    from deployment.tensorflow_ie import InferenceWithPb
-    from deployment.onnx_ie import InferenceWithOnnx
-    # input_data = np.random.uniform(-1, 1, (1, 4, 1024, 1024)).astype(np.float32)
-    input_data = np.ones((1, 4, 1024, 1024)).astype(np.float32)
-    # onnx
-    model_dir = './encoder_fix.opt.onnx'
-    ie_onnx = InferenceWithOnnx(model_dir)
-    result = ie_onnx.predict(input_data)
-    onnx_result = np.squeeze(result)
-    # trt
-    ie_trt = InferenceWithTensorRT(**build_encoder_kwargs)
-    result = ie_trt.predict(input_data)
-    trt_result = np.squeeze(result)
-    # tf
-    model_dir = './encoder_fix.opt.pb'
-    ie_tf = InferenceWithPb(model_dir)
-    result = ie_tf.predict(input_data)
-    tf_result = np.squeeze(result)
-    # liulu
-    e = './mini_inference/models/lilu/264_12400_wl_optimized_sgan_encoder.pb'#'./mini_inference/models/lilu/256_optimized_sgan_encoder.pb'
-    INPUT_NODE_E = 'E/_Run/images_in:0'
-    OUTPUT_NODE_E = 'E/_Run/concat:0'
-    ie = InferenceWithPb(e, INPUT_NODE_E, OUTPUT_NODE_E)
-    result = ie.predict(input_data)
-    ll_result = np.squeeze(result)
-    print ('ll:{}'.format(ll_result))
-    print('tf:{}'.format(tf_result))
-    print ('onnx:{}'.format(onnx_result))
-    print ('trt:{}'.format(trt_result))
-    return result
-
-
-if __name__ == '__main__':
-    encoder_output_check()
 
