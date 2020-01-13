@@ -1,3 +1,7 @@
+from functools import wraps
+import time
+
+
 def line_profile(func):
     """
     function decoderator for line-wise profile
@@ -10,7 +14,6 @@ def line_profile(func):
     :param func:
     :return:
     """
-    from functools import wraps
     import line_profiler
     prof = line_profiler.LineProfiler()
     @wraps(func)
@@ -21,3 +24,17 @@ def line_profile(func):
         finally:
             prof.print_stats(1e-3)
     return newfunc
+
+
+def timethis(func):
+    '''
+    Decorator that reports the execution time.
+    '''
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(func.__name__, end-start)
+        return result
+    return wrapper

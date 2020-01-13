@@ -154,42 +154,48 @@ def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=No
         1. output pb is not best for visualization
         2. constants folding is limit in tensorflow graph transforms, with explicit batch size 1 enables more constants folding,
             however still constants not folded.
+        3. fix shape for input_tensor is recommanded
     :param frozen_pb_or_graph_def:
     :param input_names: str or list
     :param output_names: str or list
     :param transforms:
     :return: optimize graph def
     """
-    from tensorflow.tools.graph_transforms import TransformGraph
-    if transforms is None:
-        transforms = [
-            'remove_nodes(op=Identity)',
-            # 'merge_duplicate_nodes', # not good for visualization
-            'strip_unused_nodes',
-            # 'remove_attribute(attribute_name=_class)',
-            'fold_constants(ignore_errors=true)',
-            'fold_batch_norms',
-            # 'sort_by_execution_order',
-            # 'fuse_convolutions',
-            'remove_device',
-            # 'quantize_nodes',
-            # 'quantize_weights',
-        ]
-    if isinstance(input_names, str):
-        input_names = [input_names]
-    if isinstance(output_names, str):
-        output_names = [output_names]
-    if isinstance(frozen_pb_or_graph_def, str):
-        graph_def = read_pb(frozen_pb_or_graph_def)
-    else:
-        graph_def = frozen_pb_or_graph_def
-    if (input_names is None) and (output_names is None):
-        input_names, output_names = automatic_inputs_outputs_detect(graph_def)
-    optimized_graph_def = TransformGraph(graph_def,
-                                         input_names,
-                                         output_names,
-                                         transforms)
-    return optimized_graph_def
+    try:
+        from tensorflow.tools.graph_transforms import TransformGraph
+        if transforms is None:
+            transforms = [
+                'remove_nodes(op=Identity)',
+                # 'merge_duplicate_nodes', # not good for visualization
+                'strip_unused_nodes',
+                # 'remove_attribute(attribute_name=_class)',
+                'fold_constants(ignore_errors=true)',
+                'fold_batch_norms',
+                # 'sort_by_execution_order',
+                # 'fuse_convolutions',
+                'remove_device',
+                # 'quantize_nodes',
+                # 'quantize_weights',
+            ]
+        if isinstance(input_names, str):
+            input_names = [input_names]
+        if isinstance(output_names, str):
+            output_names = [output_names]
+        if isinstance(frozen_pb_or_graph_def, str):
+            graph_def = read_pb(frozen_pb_or_graph_def)
+        else:
+            graph_def = frozen_pb_or_graph_def
+        if (input_names is None) and (output_names is None):
+            input_names, output_names = automatic_inputs_outputs_detect(graph_def)
+        optimized_graph_def = TransformGraph(graph_def,
+                                             input_names,
+                                             output_names,
+                                             transforms)
+        return optimized_graph_def
+    except Exception as e:
+        print ('graph optimization error:{}'.format(e))
+        print('maybe fix the shape of your input_tensor and try again')
+        return False
 
 
 def automatic_inputs_outputs_detect(graph_def):
@@ -231,27 +237,31 @@ def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimiz
     """
     sess_or = K.get_session()
     weights = tk_model.get_weights()
-    with tf.Graph().as_default() as graph, tf.Session(graph=graph).as_default() as sess:
-        K.set_session(sess)
-        K.set_learning_phase(0)
-        new_model = tf.keras.models.clone_model(tk_model)
-        new_model.trainable = False
-        sess.run(tf.global_variables_initializer())
-        new_model.set_weights(weights)
-        input_names = [item.name for item in new_model.inputs]
-        output_names = [item.name for item in new_model.outputs]
-        graph = freeze_sess_to_constant_pb(sess, output_node_names=output_names)
-        if export_name:
-            export_name = export_name.strip('.pb')
-        else:
-            export_name = tk_model.name
-        tf.io.write_graph(graph, export_dir, export_name + '.pb', as_text=False)
-        if optimize_graph:
-            graph = graph_optimization(graph, input_names=input_names, output_names=output_names)
-            tf.io.write_graph(graph, export_dir, export_name + '.opt.pb')
-        if verbose:
-            print('frozen pb saved to:{}'.format(os.path.join(export_dir, export_name)))
-    K.set_session(sess_or)
+    try:
+        with tf.Graph().as_default() as graph, tf.Session(graph=graph).as_default() as sess:
+            K.set_session(sess)
+            K.set_learning_phase(0)
+            new_model = tf.keras.models.clone_model(tk_model)
+            new_model.trainable = False
+            sess.run(tf.global_variables_initializer())
+            new_model.set_weights(weights)
+            input_names = [item.name for item in new_model.inputs]
+            output_names = [item.name for item in new_model.outputs]
+            graph = freeze_sess_to_constant_pb(sess, output_node_names=output_names)
+            if export_name:
+                export_name = export_name.strip('.pb')
+            else:
+                export_name = tk_model.name
+            tf.io.write_graph(graph, export_dir, export_name + '.pb', as_text=False)
+            if optimize_graph:
+                graph = graph_optimization(graph, input_names=input_names, output_names=output_names)
+                tf.io.write_graph(graph, export_dir, export_name + '.opt.pb')
+            if verbose:
+                print('frozen pb saved to:{}'.format(os.path.join(export_dir, export_name)))
+    except Exception as e:
+        print (e)
+    finally:
+        K.set_session(sess_or) # rollback keras session
     return
 
 
@@ -287,12 +297,12 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
 
+    assert os.path.exists(weight_path), 'weights not found'
     K.clear_session()
     K.set_learning_phase(0)  # all new operations will be in test mode from now on,
                             # which is crucial for converting to tflite and a frozen pb
     model = _model_wrapper(model_fn, input_shape, export_name)
-    if weight_path and os.path.exists(weight_path):
-        model.load_weights(weight_path)
+    model.load_weights(weight_path, by_name=True)
     with K.get_session() as sess:
         frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
         tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)

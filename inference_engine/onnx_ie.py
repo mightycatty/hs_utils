@@ -5,7 +5,6 @@ class InferenceWithOnnx():
     """
     only path to model is required, input and outputs will be detected automatically
     """
-
     def __init__(self, model_file,
                  pre_processing_fn=None,
                  post_processing_fn=None,
@@ -31,7 +30,6 @@ class InferenceWithOnnx():
         self._get_inputs()
 
     def predict(self, input_data,
-                output_nodes=None,
                 **kwargs):
         if not isinstance(input_data, list):
             input_data = [input_data]

@@ -94,6 +94,23 @@ def set_gpus_visiable(gpu_num=1, verbose=True):
     if verbose:
         print ('Using GPUs:{}'.format(gpu_id_str))
     return
+
+
+def say_hi_to_your_program():
+    """
+    python program initialization, run before the main function in your python program
+    1. clean up console, filter warnings
+    :return:
+    """
+    import warnings
+    warnings.filterwarnings("ignore")
+    warnings.simplefilter(action='ignore', category=FutureWarning) # disable nasty future warning in tensorflow and numpy
+
+
+def disable_gpu():
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
+
 # ===============================================================================================================
 
 

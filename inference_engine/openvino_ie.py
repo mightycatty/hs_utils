@@ -1,14 +1,14 @@
-from openvino.inference_engine import IENetwork, IECore
-import os
 import logging
+import os
 import sys
 
+from openvino.inference_engine import IENetwork, IECore
 
 CPU_EXTENSION = r'C:\Program Files (x86)\IntelSWTools\openvino\deployment_tools\inference_engine\bin\intel64\Release' \
                 r'\cpu_extension_avx2.dll'
 
 
-class InferenceWithIE:
+class InferenceWithOpenvino:
     def __init__(self, model_file,
                  device='CPU',
                  pre_processing_fn=None,
@@ -40,7 +40,7 @@ class InferenceWithIE:
             not_supported_layers = [l for l in net.layers.keys() if l not in supported_layers]
             if len(not_supported_layers) != 0:
                 logging.error("Following layers are not supported by the plugin for specified device {}:\n {}".
-                          format(self.device, ', '.join(not_supported_layers)))
+                              format(self.device, ', '.join(not_supported_layers)))
                 logging.error(
                     "Please try to specify cpu extensions library path in sample's command line parameters using -l "
                     "or --cpu_extension command line argument")

@@ -11,7 +11,8 @@ Known issue:
     6. resize is still not supported for uff parser in tensorrt 7.0.0(though it's claimed)
 """
 import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning) # disable nasty future warning in tensorflow and numpy
+
+warnings.simplefilter(action='ignore', category=FutureWarning)  # disable nasty future warning in tensorflow and numpy
 
 import os
 import tensorrt as trt
@@ -19,15 +20,13 @@ import logging
 import uff
 import numpy as np
 import pycuda.driver as cuda
-import pycuda.autoinit
 import sys
-
 
 logging.basicConfig(level=logging.DEBUG,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                     datefmt="%Y-%m-%d %H:%M:%S")
 logger = logging.getLogger(__name__)
-TRT_LOGGER = trt.Logger(trt.Logger.ERROR) # global trt logger setting
+TRT_LOGGER = trt.Logger(trt.Logger.ERROR)  # global trt logger setting
 
 
 class TensorrtBuilder:
@@ -140,14 +139,14 @@ class TensorrtBuilder:
 
     @staticmethod
     def build_engine_from_pb_or_onnx(model_file,
-                                input_node_names=None,
-                                input_node_shapes=None,
-                                output_node_names=None,
-                                explicit_batch_dim=False,
-                                max_batch_size=1,
-                                max_workspace_size=1 << 30,
-                                mix_precision='fp16',
-                                calib=None):
+                                     input_node_names=None,
+                                     input_node_shapes=None,
+                                     output_node_names=None,
+                                     explicit_batch_dim=False,
+                                     max_batch_size=1,
+                                     max_workspace_size=1 << 30,
+                                     mix_precision='fp16',
+                                     calib=None):
         def _assertion():
             name, model_type = tuple(os.path.splitext(model_file))
             assert model_type in ['.pb', '.onnx'], 'invalid model format:{}/(pb-onnx)'.format(model_type)
@@ -183,8 +182,9 @@ class TensorrtBuilder:
                         logger.error(parser.get_error(error))
                     sys.exit(1)
         # build engine
-        built_engine = TensorrtBuilder._build_engine(network, builder, explicit_batch_dim, max_batch_size, max_workspace_size,
-                                      mix_precision, calib)
+        built_engine = TensorrtBuilder._build_engine(network, builder, explicit_batch_dim, max_batch_size,
+                                                     max_workspace_size,
+                                                     mix_precision, calib)
         if built_engine:
             logger.info('engine built!')
             TensorrtBuilder.save_engine(built_engine, name)
@@ -196,10 +196,11 @@ class TensorrtBuilder:
 
 class EncoderEntropyCalibrator(trt.IInt8EntropyCalibrator2):
     """
-    simple calibrator passed to builder for buiding a int8 engine.
+    simple calibrator passed to builder for building a int8 engine.
     """
-    def __init__(self, data_gen, # a python generator, each yield return a batch of x(N, C)/ (y is not required)
-                 cache_file, # calibrator cache file name, str
+
+    def __init__(self, data_gen,  # a python generator, each yield return a batch of x(N, C)/ (y is not required)
+                 cache_file,  # calibrator cache file name, str
                  batch_size=8,
                  input_shape_wo_batch_dim=(4, 1024, 1024)):
         # Whenever you specify a custom constructor for a TensorRT class,
@@ -263,17 +264,18 @@ class InferenceWithTensorRT:
         self.trt_engine = None
         engine_file = os.path.splitext(self.model_dir)[0] + '.engine'
         if not os.path.exists(engine_file) or self.force_rebuild:
-            print ('no built engine found, building a new one...')
+            print('no built engine found, building a new one...')
             model_type = os.path.splitext(self.model_dir)[-1]
             valid_model_format = ['.pb', '.uff', '.onnx']
-            assert model_type in valid_model_format, 'provided model is invalid:{}/{}'.format(model_type, valid_model_format)
+            assert model_type in valid_model_format, 'provided model is invalid:{}/{}'.format(model_type,
+                                                                                              valid_model_format)
             if model_type == '.onnx':
                 build_fn = TensorrtBuilder.build_engine_from_onnx
             else:
                 build_fn = TensorrtBuilder.build_engine_from_tf_pb
             self.trt_engine = build_fn(self.model_dir, **self.kwargs)
         else:
-            print ('loading built engine:{}...'.format(engine_file))
+            print('loading built engine:{}...'.format(engine_file))
             self.trt_engine = TensorrtBuilder.load_engine(self.trt_runtime, engine_file)
 
     def _context_init(self):
@@ -310,9 +312,11 @@ class InferenceWithTensorRT:
         cuda.memcpy_htod_async(self.cuda_input, self.host_input, self.stream)
         # Run inference. difference execution api by the way the engine built(implicit/explicit batch size)
         if self.trt_engine.has_implicit_batch_dimension:
-            self.context.execute_async(bindings=[int(self.cuda_input), int(self.cuda_output)], stream_handle=self.stream.handle)
+            self.context.execute_async(bindings=[int(self.cuda_input), int(self.cuda_output)],
+                                       stream_handle=self.stream.handle)
         else:
-            self.context.execute_async_v2(bindings=[int(self.cuda_input), int(self.cuda_output)], stream_handle=self.stream.handle)
+            self.context.execute_async_v2(bindings=[int(self.cuda_input), int(self.cuda_output)],
+                                          stream_handle=self.stream.handle)
         # gpu -> cpu.
         cuda.memcpy_dtoh_async(self.host_output, self.cuda_output, self.stream)
         # Synchronize the stream
@@ -322,4 +326,3 @@ class InferenceWithTensorRT:
             output = self.post_processing_fn(output)
         # Return the host output.
         return output
-

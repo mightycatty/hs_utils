@@ -1,6 +1,7 @@
-import cv2
-import acapture
 import logging
+
+import acapture
+import cv2
 import numpy as np
 
 
@@ -17,10 +18,10 @@ def video_reader(video_dir, loop=False, cvt_format='RGB', *args, **kwargs):
     """
     assert cvt_format in ['RGB', 'BGR'], 'invalid cvt format-{RGB/BGR}'
     if type(video_dir) is int:
-        cap = acapture.open(video_dir) # RGB
+        cap = acapture.open(video_dir, loop=loop)  # RGB
         cvt_format_in = 'RGB'
     else:
-        cap = cv2.VideoCapture(video_dir) # BGR
+        cap = cv2.VideoCapture(video_dir, loop=loop)  # BGR
         cvt_format_in = 'BGR'
         # cvt_flag = 1
         # cap.set(cv2.CAP_PROP_FPS, 60)
@@ -80,15 +81,16 @@ class VideoWriter:
 
     def write_frame(self, image, verbose=False):
         try:
-           if not self._video_writer:
-               self._out_size = (image.shape[1], image.shape[0])
-               self._video_writer_init()
-           assert (image.shape[0] == self._out_size[1]) & (image.shape[1] == self._out_size[0]), 'image shape not compilable with video saver shape'
-           self._video_writer.write(image)
-           if verbose:
-               cv2.namedWindow("video_writer", cv2.WINDOW_NORMAL)
-               cv2.imshow('video_writer', image)
-               cv2.waitKey(1)
+            if not self._video_writer:
+                self._out_size = (image.shape[1], image.shape[0])
+                self._video_writer_init()
+            assert (image.shape[0] == self._out_size[1]) & (
+                        image.shape[1] == self._out_size[0]), 'image shape not compilable with video saver shape'
+            self._video_writer.write(image)
+            if verbose:
+                cv2.namedWindow("video_writer", cv2.WINDOW_NORMAL)
+                cv2.imshow('video_writer', image)
+                cv2.waitKey(1)
         except Exception as e:
             logging.error('write frame error:{}').format(e)
             return False
@@ -96,3 +98,18 @@ class VideoWriter:
 
     def release(self):
         self._video_writer.release()
+
+
+# TODO: threading to save img to disk
+class ImgSaver:
+    pass
+
+
+def get_latest_file(folder):
+    """get latest created file, helpful when finding your latest model checkpoint
+    """
+    import os
+    file_list = os.listdir(folder)
+    latest_file = max(file_list, key=os.path.getctime)
+    latest_file = os.path.join(folder, latest_file)
+    return latest_file

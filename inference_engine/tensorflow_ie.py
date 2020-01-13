@@ -2,7 +2,7 @@ import tensorflow as tf
 from tensorflow import gfile
 
 
-class InferenceWithPb():
+class InferenceWithPb:
     """
     compact tensorflow inference backend which takes in a froze .pb and names of input and output tensor.
     1. data feed to the network is required to be pre-processed beforehand, raw output from network is delivered without any post-processing.
@@ -31,6 +31,20 @@ class InferenceWithPb():
         self._construct_graph()
         self._init_session()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            self.sess.close()
+        finally:
+            pass
+
+    def __del__(self):
+        try:
+            self.sess.close()
+        finally:
+            pass
 
     @staticmethod
     def _read_pb(pb_dir):
@@ -109,10 +123,16 @@ class InferenceWithPb():
             output_nodes_list += output_nodes
         else:
             output_nodes_list += self.output
+
         if not isinstance(input_data, list):
             input_data = [input_data]
+        if self.pre_processing_fn:
+            input_data = [self.pre_processing_fn(item) for item in input_data]
+
         feed_dict = {key: value for key, value in zip(self.input, input_data)}
         result = self.sess.run(output_nodes_list, feed_dict=feed_dict)
+        if self.post_processing_fn:
+            result = [self.post_processing_fn(item) for item in result]
         if len(result) == 1:
             result = result[0]
         return result

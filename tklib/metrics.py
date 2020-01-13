@@ -1,7 +1,6 @@
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
 from tensorflow.python.ops import control_flow_ops
-import numpy as np
 
 
 def mean_iou(y_true, y_pred):
