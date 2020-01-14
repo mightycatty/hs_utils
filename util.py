@@ -8,10 +8,10 @@ def run_command(cmd, verbose=False):
     try:
         output = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True).communicate()[0].decode("ascii")
         if verbose:
-            print (output)
+            print(output)
         return output
     except Exception as e:
-        print (e)
+        print(e)
         return False
 
 
@@ -29,10 +29,10 @@ def list_available_gpus(verbose=False):
     result = []
     for line in output.strip().split("\n"):
         m = gpu_regex.match(line)
-        assert m, "Couldnt parse "+line
+        assert m, "Couldnt parse " + line
         result.append(int(m.group("gpu_id")))
     if verbose:
-        print (result)
+        print(result)
     return result
 
 
@@ -60,7 +60,7 @@ def gpu_memory_map(verbose=False):
         # gpu_memory = int(m.group("gpu_memory"))
         # result[gpu_id] += gpu_memory
     if verbose:
-        print (result)
+        print(result)
     return result
 
 
@@ -69,12 +69,12 @@ def pick_n_gpu_lowest_memory(n=1):
     memory_gpu_map = [(memory, gpu_id) for (gpu_id, memory) in gpu_memory_map().items()]
     best_gpu = []
     for item in sorted(memory_gpu_map)[:n]:
-        if item[0] < 500: # 500MB
+        if item[0] < 500:  # 500MB
             best_gpu.append(item[1])
     if len(best_gpu) == n:
         return best_gpu
     else:
-        print ('not enough gpus available')
+        print('not enough gpus available')
         exit(0)
 
 
@@ -92,7 +92,7 @@ def set_gpus_visiable(gpu_num=1, verbose=True):
         gpu_id_str = str(best_gpu)
     os.environ["CUDA_VISIBLE_DEVICES"] = gpu_id_str
     if verbose:
-        print ('Using GPUs:{}'.format(gpu_id_str))
+        print('Using GPUs:{}'.format(gpu_id_str))
     return
 
 
@@ -104,13 +104,24 @@ def say_hi_to_your_program():
     """
     import warnings
     warnings.filterwarnings("ignore")
-    warnings.simplefilter(action='ignore', category=FutureWarning) # disable nasty future warning in tensorflow and numpy
+    warnings.simplefilter(action='ignore',
+                          category=FutureWarning)  # disable nasty future warning in tensorflow and numpy
 
 
 def disable_gpu():
     import os
     os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
+
 # ===============================================================================================================
 
+def flat_list(list_input):
+    """Flatten nested list"""
+    list_flatten = []
+    for item in list_input:
+        if isinstance(item, list):
+            list_flatten += flat_list(item)
+        else:
+            list_flatten += [item]
+    return list_flatten
 

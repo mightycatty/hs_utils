@@ -171,7 +171,7 @@ class TensorrtBuilder:
         if model_type == '.pb':
             input_node_names = TensorrtBuilder.item_to_list(input_node_names)
             output_node_names = TensorrtBuilder.item_to_list(output_node_names)
-            network = TensorrtBuilder._pb_uff_parser(model_type, network, input_node_names, input_node_shapes,
+            network = TensorrtBuilder._pb_uff_parser(model_file, network, input_node_names, input_node_shapes,
                                                      output_node_names)
         else:
             parser = trt.OnnxParser(network, TRT_LOGGER)

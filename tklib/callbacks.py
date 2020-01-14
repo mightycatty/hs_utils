@@ -24,7 +24,7 @@ class IntermediateOutputVisualization(Callback):
                  x,
                  log_dir,
                  y=None,
-                 interested_layers=None
+                 interested_tensor=None
                  ):
         super(IntermediateOutputVisualization, self).__init__()
         self.x = x
