@@ -92,7 +92,7 @@ class TensorrtBuilder:
                       explicit_batch_dim=False,
                       max_batch_size=1,
                       max_workspace_size=1 << 30,
-                      mix_precision='fp16',
+                      mix_precision='fp32',
                       calib=None):
         # dynamic shape building config with explict_batch_size = True
         if explicit_batch_dim:
@@ -163,6 +163,11 @@ class TensorrtBuilder:
         logger.info('building engine from:{}'.format(model_file))
         logger.info('explict batch dim:{}'.format(explicit_batch_dim))
         name, model_type = tuple(os.path.splitext(model_file))
+
+        # force explicit batch dim flag for onnx model, 7.0.0 only supports parsing onnx with explicit_batch flag
+        if os.path.splitext(model_dir)[-1] == '.onnx':
+            explicit_batch_dim = 1
+
         # initialize builder
         builder = trt.Builder(TRT_LOGGER)
         network_flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH) if explicit_batch_dim else 0
@@ -192,6 +197,85 @@ class TensorrtBuilder:
         else:
             logger.error('fail to build engine!')
             return False
+
+
+class InferenceWithTensorRT:
+    def __init__(self, model_file, pre_processing_fn=None, post_processing_fn=None, force_rebuild=False, **kwargs):
+        self.model_dir = model_file
+        self.pre_processing_fn = pre_processing_fn
+        self.post_processing_fn = post_processing_fn
+        self.kwargs = kwargs
+        self.force_rebuild = force_rebuild
+        self._engine_init()
+        self._context_init()
+
+    def _engine_init(self):
+        """
+        load a engine buffer or buid a new one
+        :return: a trt engine obj
+        """
+        self.trt_runtime = trt.Runtime(TRT_LOGGER)
+        self.trt_engine = None
+        engine_file = os.path.splitext(self.model_dir)[0] + '.engine'
+        if not os.path.exists(engine_file) or self.force_rebuild:
+            print('no built engine found, building a new one...')
+            model_type = os.path.splitext(self.model_dir)[-1]
+            valid_model_format = ['.pb', '.onnx']
+            assert model_type in valid_model_format, 'provided model is invalid:{}/{}'.format(model_type,
+                                                                                              valid_model_format)
+            self.trt_engine = TensorrtBuilder.build_engine_from_pb_or_onnx(self.model_dir, **self.kwargs)
+        else:
+            print('loading built engine:{}...'.format(engine_file))
+            self.trt_engine = TensorrtBuilder.load_engine(self.trt_runtime, engine_file)
+
+    def _context_init(self):
+        volume = trt.volume(self.trt_engine.get_binding_shape(0)) * self.trt_engine.max_batch_size
+        self.input_dtype = trt.nptype(self.trt_engine.get_binding_dtype(0))
+        self.host_input = cuda.pagelocked_empty(volume, dtype=self.input_dtype)
+        volume = trt.volume(self.trt_engine.get_binding_shape(1)) * self.trt_engine.max_batch_size
+        dtype = trt.nptype(self.trt_engine.get_binding_dtype(1))
+        self.host_output = cuda.pagelocked_empty(volume, dtype=dtype)
+        # Allocate device memory for inputs and outputs.
+        self.cuda_input = cuda.mem_alloc(self.host_input.nbytes)
+        self.cuda_output = cuda.mem_alloc(self.host_output.nbytes)
+        self.context = self.trt_engine.create_execution_context()
+        self.context.active_optimization_profile = 0
+        self.stream = cuda.Stream()
+
+    def predict(self, input_data):
+        """
+        predict with async api
+        data -> cpu -> GPU -> cpu
+        :param input_data:
+        :param kwargs:
+        :return:
+        """
+        if self.pre_processing_fn is not None:
+            input_data = self.pre_processing_fn(input_data)
+        if str(input_data.dtype) != self.input_dtype.__name__:
+            logging.warning('dtype of input data:{} is not compilable with engine input:{}, enforcing dtype convertion'
+                            .format(str(input_data.dtype), self.input_dtype.__name__))
+            input_data = self.input_dtype(input_data)
+        # input data -> cpu
+        np.copyto(self.host_input, input_data.ravel())
+        # cpu -> gpu
+        cuda.memcpy_htod_async(self.cuda_input, self.host_input, self.stream)
+        # Run inference. difference execution api by the way the engine built(implicit/explicit batch size)
+        if self.trt_engine.has_implicit_batch_dimension:
+            self.context.execute_async(bindings=[int(self.cuda_input), int(self.cuda_output)],
+                                       stream_handle=self.stream.handle)
+        else:
+            self.context.execute_async_v2(bindings=[int(self.cuda_input), int(self.cuda_output)],
+                                          stream_handle=self.stream.handle)
+        # gpu -> cpu.
+        cuda.memcpy_dtoh_async(self.host_output, self.cuda_output, self.stream)
+        # Synchronize the stream
+        self.stream.synchronize()
+        output = self.host_output
+        if self.post_processing_fn is not None:
+            output = self.post_processing_fn(output)
+        # Return the host output.
+        return output
 
 
 class EncoderEntropyCalibrator(trt.IInt8EntropyCalibrator2):
@@ -245,84 +329,3 @@ class EncoderEntropyCalibrator(trt.IInt8EntropyCalibrator2):
             f.write(cache)
 
 
-class InferenceWithTensorRT:
-    def __init__(self, model_file, pre_processing_fn=None, post_processing_fn=None, force_rebuild=False, **kwargs):
-        self.model_dir = model_file
-        self.pre_processing_fn = pre_processing_fn
-        self.post_processing_fn = post_processing_fn
-        self.kwargs = kwargs
-        self.force_rebuild = force_rebuild
-        self._engine_init()
-        self._context_init()
-
-    def _engine_init(self):
-        """
-        load a engine buffer or buid a new one
-        :return: a trt engine obj
-        """
-        self.trt_runtime = trt.Runtime(TRT_LOGGER)
-        self.trt_engine = None
-        engine_file = os.path.splitext(self.model_dir)[0] + '.engine'
-        if not os.path.exists(engine_file) or self.force_rebuild:
-            print('no built engine found, building a new one...')
-            model_type = os.path.splitext(self.model_dir)[-1]
-            valid_model_format = ['.pb', '.uff', '.onnx']
-            assert model_type in valid_model_format, 'provided model is invalid:{}/{}'.format(model_type,
-                                                                                              valid_model_format)
-            if model_type == '.onnx':
-                build_fn = TensorrtBuilder.build_engine_from_onnx
-            else:
-                build_fn = TensorrtBuilder.build_engine_from_tf_pb
-            self.trt_engine = build_fn(self.model_dir, **self.kwargs)
-        else:
-            print('loading built engine:{}...'.format(engine_file))
-            self.trt_engine = TensorrtBuilder.load_engine(self.trt_runtime, engine_file)
-
-    def _context_init(self):
-        volume = trt.volume(self.trt_engine.get_binding_shape(0)) * self.trt_engine.max_batch_size
-        self.input_dtype = trt.nptype(self.trt_engine.get_binding_dtype(0))
-        self.host_input = cuda.pagelocked_empty(volume, dtype=self.input_dtype)
-        volume = trt.volume(self.trt_engine.get_binding_shape(1)) * self.trt_engine.max_batch_size
-        dtype = trt.nptype(self.trt_engine.get_binding_dtype(1))
-        self.host_output = cuda.pagelocked_empty(volume, dtype=dtype)
-        # Allocate device memory for inputs and outputs.
-        self.cuda_input = cuda.mem_alloc(self.host_input.nbytes)
-        self.cuda_output = cuda.mem_alloc(self.host_output.nbytes)
-        self.context = self.trt_engine.create_execution_context()
-        self.context.active_optimization_profile = 0
-        self.stream = cuda.Stream()
-
-    def predict(self, input_data):
-        """
-        predict with async api
-        data -> cpu -> GPU -> cpu
-        :param input_data:
-        :param kwargs:
-        :return:
-        """
-        if self.pre_processing_fn is not None:
-            input_data = self.pre_processing_fn(input_data)
-        if str(input_data.dtype) != self.input_dtype.__name__:
-            logging.warning('dtype of input data:{} is not compilable with engine input:{}, enforcing dtype convertion'
-                            .format(str(input_data.dtype), self.input_dtype.__name__))
-            input_data = self.input_dtype(input_data)
-        # input data -> cpu
-        np.copyto(self.host_input, input_data.ravel())
-        # cpu -> gpu
-        cuda.memcpy_htod_async(self.cuda_input, self.host_input, self.stream)
-        # Run inference. difference execution api by the way the engine built(implicit/explicit batch size)
-        if self.trt_engine.has_implicit_batch_dimension:
-            self.context.execute_async(bindings=[int(self.cuda_input), int(self.cuda_output)],
-                                       stream_handle=self.stream.handle)
-        else:
-            self.context.execute_async_v2(bindings=[int(self.cuda_input), int(self.cuda_output)],
-                                          stream_handle=self.stream.handle)
-        # gpu -> cpu.
-        cuda.memcpy_dtoh_async(self.host_output, self.cuda_output, self.stream)
-        # Synchronize the stream
-        self.stream.synchronize()
-        output = self.host_output
-        if self.post_processing_fn is not None:
-            output = self.post_processing_fn(output)
-        # Return the host output.
-        return output
