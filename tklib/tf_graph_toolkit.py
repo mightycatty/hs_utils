@@ -60,7 +60,8 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
     run_meta = tf.RunMetadata()
     opts = tf.profiler.ProfileOptionBuilder.float_operation()
     flops = tf.profiler.profile(graph=graph_or_pb,
-                                run_meta=run_meta, cmd='op', options=opts)
+                                run_meta=run_meta, cmd='scope', options=opts)
+
     return flops.total_float_ops
 
 

@@ -165,8 +165,10 @@ class TensorrtBuilder:
         name, model_type = tuple(os.path.splitext(model_file))
 
         # force explicit batch dim flag for onnx model, 7.0.0 only supports parsing onnx with explicit_batch flag
-        if os.path.splitext(model_dir)[-1] == '.onnx':
+        if os.path.splitext(model_file)[-1] == '.onnx':
             explicit_batch_dim = 1
+            logger.info('forcing explicit batch flag for onnx model, '
+                        '7.0.0 only supports parsing onnx with explicit_batch flag')
 
         # initialize builder
         builder = trt.Builder(TRT_LOGGER)
