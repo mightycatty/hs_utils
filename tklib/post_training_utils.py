@@ -1,8 +1,9 @@
+"""post-training model analyse/optimization
 """
-tensorflow-graph toolkit
-"""
+
 import os
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
 
@@ -194,7 +195,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=No
                                              transforms)
         return optimized_graph_def
     except Exception as e:
-        print ('graph optimization error:{}'.format(e))
+        print('graph optimization error:{}'.format(e))
         print('maybe fix the shape of your input_tensor and try again')
         return False
 
@@ -260,14 +261,15 @@ def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimiz
             if verbose:
                 print('frozen pb saved to:{}'.format(os.path.join(export_dir, export_name)))
     except Exception as e:
-        print (e)
+        print(e)
     finally:
-        K.set_session(sess_or) # rollback keras session
+        K.set_session(sess_or)  # rollback keras session
     return
 
 
 # TODO: code stylish
-def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name, graph_optimize=True,
+def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name,
+                                           graph_optimize=True,
                                            export_tf_lite=False):
     """
     由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
@@ -301,7 +303,7 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
     assert os.path.exists(weight_path), 'weights not found'
     K.clear_session()
     K.set_learning_phase(0)  # all new operations will be in test mode from now on,
-                            # which is crucial for converting to tflite and a frozen pb
+    # which is crucial for converting to tflite and a frozen pb
     model = _model_wrapper(model_fn, input_shape, export_name)
     model.load_weights(weight_path, by_name=True)
     with K.get_session() as sess:
@@ -312,9 +314,10 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
             tf.io.write_graph(frozen_graph, export_path, export_name + '_opt.pb', as_text=False)
         # convert to tflite
         if export_tf_lite:
-            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs, model.outputs)
+            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs,
+                                                             model.outputs)
             tflite_model = converter.convert()
-            save_dir = os.path.join(export_path, export_name+'.tflite')
+            save_dir = os.path.join(export_path, export_name + '.tflite')
             with open(save_dir, 'wb') as f:
                 f.write(tflite_model)
         return frozen_graph
@@ -331,3 +334,51 @@ def constant_folding(pb_or_graphdef=None):
     graph_def = read_pb(pb_dir)
     nodes = graph_def.node
     return graph_def
+
+
+from ..inference_engine.tfkeras_ie import _load_model
+
+
+# TODO a more convenient abstract model obj
+class ModelAnalyse():
+    def __init__(self, model_fn=None, weight_dir=None, input_shape=None, keras_model_with_weights=None, *args,
+                 **kwargs):
+        def _assert():
+            assert model_fn or weight_dir or keras_model_with_weights, 'initialization error'
+            if keras_model_with_weights is None:
+                assert model_fn and weight_dir and input_shape, 'build_model function/model weights/input_shape ' \
+                                                                'are required for initializing a keras model'
+
+        _assert()
+        self.model = _load_model(model_fn, weight_dir, input_shape)
+
+    def weight_analyse(self, warning_threshold=1e-7, verbose=False):
+        """
+        detect weights with extreme value
+        :param model:
+        :return:
+        """
+        warning_dict = {}
+        for item in self.model.weights:
+            weights_value = K.get_value(item)
+            w_name = item.name
+            abnormal_factor = (np.sum(np.abs(weights_value) > warning_threshold) + \
+                               np.sum(np.abs(weights_value) < (1. / warning_threshold)))
+            if abnormal_factor > 0:
+                warning_dict[w_name] = abnormal_factor / float(weights_value.size)
+        warning_dict = sorted(warning_dict.items(), key=warning_dict.values())
+        if verbose:
+            print(warning_dict)
+        return warning_dict
+
+    # TODO
+    def convolution_layer_analyse_l1(self):
+        pass
+
+    def batch_normalization_layer_analyse(self):
+        """
+        moving mean and variance in batch normalization layer hits whether outputs from previous are abnormal
+        eg, relu+bn
+            moving variance < 1e-30 hits relu death zone
+        :return:
+        """
