@@ -406,7 +406,7 @@ class AbnormalWeightCheck(Callback):
                                np.sum(np.abs(weights_value) < (1. / self.warning_threshold)))
             if abnormal_factor > 0:
                 warning_dict[w_name] = abnormal_factor / float(weights_value.size)
-        warning_dict = sorted(warning_dict.items(), key=warning_dict.values())
+        # warning_dict = sorted(warning_dict.items(), key=warning_dict.values)
         return warning_dict
 
     def on_epoch_end(self, epoch, logs=None):

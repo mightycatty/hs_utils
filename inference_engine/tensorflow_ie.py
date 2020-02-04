@@ -1,5 +1,6 @@
 import tensorflow as tf
 from tensorflow import gfile
+import os
 
 
 class InferenceWithPb:
@@ -19,6 +20,7 @@ class InferenceWithPb:
                  tf_trt=False,
                  **kwargs):
         # attr
+        assert os.path.exists(model_file), 'model_file not exist!'
         self.input_name = input_nodes  # list
         self.output_name = output_nodes  # list
         self.input = []  # input tensor

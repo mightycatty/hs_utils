@@ -1,11 +1,11 @@
-"""freestanding testing scrip for style-gan encoder and generator with trt backend
+"""freestanding testing models with trt backend
 
 tested on tensorrt 7.0.0, might run into issue under other versions.
 
 Known issue:
     1. tensorrt 6.0 onnx parser works with opset<=7
     2. tensorrt 7.0.0 conv2d_transpose is broken(output is different from tf/onnx)
-    3. tensorrt 7.0.0 onnx int8-calibrator is broken
+    3. tensorrt 7.0.0 onnx int8-calibrator is (somehow)broken
     4. transpose is broken(data is transposed while shape is kept)
     5. tensorrt 7.0.0 onnx parser only works with networks with explicit batch dim
     6. resize is still not supported for uff parser in tensorrt 7.0.0(though it's claimed)
@@ -280,7 +280,7 @@ class InferenceWithTensorRT:
         return output
 
 
-class EncoderEntropyCalibrator(trt.IInt8EntropyCalibrator2):
+class CustomEntropyCalibrator(trt.IInt8EntropyCalibrator2):
     """
     simple calibrator passed to builder for building a int8 engine.
     """

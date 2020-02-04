@@ -300,12 +300,13 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
 
-    assert os.path.exists(weight_path), 'weights not found'
     K.clear_session()
     K.set_learning_phase(0)  # all new operations will be in test mode from now on,
     # which is crucial for converting to tflite and a frozen pb
     model = _model_wrapper(model_fn, input_shape, export_name)
-    model.load_weights(weight_path, by_name=True)
+    if weight_path:
+        assert os.path.exists(weight_path), 'weights not found'
+        model.load_weights(weight_path)#, by_name=True)
     with K.get_session() as sess:
         frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
         tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)
@@ -336,20 +337,19 @@ def constant_folding(pb_or_graphdef=None):
     return graph_def
 
 
-from ..inference_engine.tfkeras_ie import _load_model
+# from ..inference_engine.tfkeras_ie import _load_model
 
 
 # TODO a more convenient abstract model obj
 class ModelAnalyse():
-    def __init__(self, model_fn=None, weight_dir=None, input_shape=None, keras_model_with_weights=None, *args,
-                 **kwargs):
-        def _assert():
-            assert model_fn or weight_dir or keras_model_with_weights, 'initialization error'
-            if keras_model_with_weights is None:
-                assert model_fn and weight_dir and input_shape, 'build_model function/model weights/input_shape ' \
-                                                                'are required for initializing a keras model'
-
-        _assert()
+    def __init__(self, pb_dir, *args, **kwargs):
+        assert os.path.exists(pb_dir)
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            graph_def = read_pb(pb_dir)
+            au_inputs, au_outputs = automatic_inputs_outputs_detect(graph_def)
+            tf.import_graph_def(graph_def, name='')
+            graph = tf.get_default_graph()
         self.model = _load_model(model_fn, weight_dir, input_shape)
 
     def weight_analyse(self, warning_threshold=1e-7, verbose=False):

@@ -1,39 +1,31 @@
 import logging
-
-import acapture
+try:
+    import acapture
+except ImportError:
+    pass
 import cv2
 import numpy as np
 
 
 # TODO: 异步模式
-def video_reader(video_dir, loop=False, cvt_format='RGB', *args, **kwargs):
+def video_reader(video_dir, loop=False, *args, **kwargs):
+    """video reader generator, each run yields a img of RGB format
+    acapture is recommended over cv2, which yields a better streaming performance. however, if you don't bother to install it,
+     just stick with OpenCV.
     """
-    read webcam or video, return a generator, utilizing acapture to webcam reading performance
-    :param video_dir: int or abs_dir of a video file
-    :param loop: loop over a video, not works if reading from webcam
-    :param cvt_format: yield image format, RGB or BRG
-    :param args:
-    :param kwargs:
-    :return:
-    """
-    assert cvt_format in ['RGB', 'BGR'], 'invalid cvt format-{RGB/BGR}'
-    if type(video_dir) is int:
+    try:
         cap = acapture.open(video_dir, loop=loop)  # RGB
-        cvt_format_in = 'RGB'
-    else:
+        cvt_format = 'RGB'
+    except Exception as e:
         cap = cv2.VideoCapture(video_dir, loop=loop)  # BGR
-        cvt_format_in = 'BGR'
-        # cvt_flag = 1
-        # cap.set(cv2.CAP_PROP_FPS, 60)
-        # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cvt_format = 'BGR'
     error_count = 0
     max_error_num = 5
     while True:
         ret, frame = cap.read()
         if ret:
-            if cvt_format_in != cvt_format:
-                frame = np.transpose(frame, [2, 1, 0])
+            if cvt_format == 'BGR':
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             yield frame
         else:
             error_count += 1
