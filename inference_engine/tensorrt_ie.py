@@ -9,7 +9,20 @@ Known issue:
     4. transpose is broken(data is transposed while shape is kept)
     5. tensorrt 7.0.0 onnx parser only works with networks with explicit batch dim
     6. resize is still not supported for uff parser in tensorrt 7.0.0(though it's claimed)
+    7. operation on tensor with over 4dim mostly results in conversion error
+
+Usage Samples:
+    1. Build tensorrt IR from .pb or .onnx
+
+
+Common Issues:
+    1. running with remote interpreter in pycharm, add path to environment path
+        LD_LIBRARY_PATH=/home/heshuai/application/TensorRT-7.0.0.11/lib
+    2. pycuda initialization error
+        import pycuda.autoinit
+
 """
+
 import warnings
 
 warnings.simplefilter(action='ignore', category=FutureWarning)  # disable nasty future warning in tensorflow and numpy
@@ -20,6 +33,7 @@ import logging
 import uff
 import numpy as np
 import pycuda.driver as cuda
+import pycuda.autoinit
 import sys
 
 logging.basicConfig(level=logging.DEBUG,
@@ -32,18 +46,18 @@ TRT_LOGGER = trt.Logger(trt.Logger.ERROR)  # global trt logger setting
 class TensorrtBuilder:
 
     @staticmethod
-    def item_to_list(item):
+    def _item_to_list(item):
         if not isinstance(item, list):
             if item:
                 item = [item]
         return item
 
     @staticmethod
-    def GiB(val):
+    def _GiB(val):
         return val * 1 << 30
 
     @staticmethod
-    def create_optimization_profile(builder, config, input_name, input_shape, batch_size=None):
+    def _create_optimization_profile(builder, config, input_name, input_shape, batch_size=None):
         """
         required for mode with dynamic shape, call build_engine(network, config) instead of build_cuda_engine(network)
         :param builder:
@@ -72,14 +86,14 @@ class TensorrtBuilder:
         config.add_optimization_profile(profile)
 
     @staticmethod
-    def save_engine(engine, dump_name) -> bool:
+    def _save_engine(engine, dump_name) -> bool:
         dump_name = '{}.engine'.format(dump_name) if '.engine' not in dump_name else dump_name
         with open(dump_name, 'wb') as f:
             f.write(engine.serialize())
         return True
 
     @staticmethod
-    def load_engine(trt_runtime, engine_path):
+    def _load_engine(trt_runtime, engine_path):
         engine_path = '{}.engine'.format(engine_path) if '.engine' not in engine_path else engine_path
         with open(engine_path, 'rb') as f:
             engine_data = f.read()
@@ -105,7 +119,7 @@ class TensorrtBuilder:
                 config.set_flag(trt.BuilderFlag.FP16)
             input_shape = network.get_input(0).shape
             input_name = network.get_input(0).name
-            TensorrtBuilder.create_optimization_profile(builder, config, input_name, input_shape, None)
+            TensorrtBuilder._create_optimization_profile(builder, config, input_name, input_shape, None)
             built_engine = builder.build_engine(network, config)
         else:
             builder.max_batch_size = max_batch_size
@@ -146,6 +160,7 @@ class TensorrtBuilder:
                                      max_batch_size=1,
                                      max_workspace_size=1 << 30,
                                      mix_precision='fp16',
+                                     logger_level='verbose',
                                      calib=None):
         def _assertion():
             name, model_type = tuple(os.path.splitext(model_file))
@@ -157,8 +172,14 @@ class TensorrtBuilder:
                 format(mix_precision, ['fp16', 'fp32', 'int8'])
             if mix_precision == 'int8':
                 assert calib is not None, 'calibrator is required for int8 mode'
+            valid_logger_level = ['verbose', 'error']
+            assert logger_level in valid_logger_level, 'valid log level:{}'.format(valid_logger_level)
 
+        def _trt_logger():
+            cmd_str = 'trt_logger = trt.Logger(trt.Logger.{})'.format(logger_level.upper())
+            exec(cmd_str)
         _assertion()
+        _trt_logger()
 
         logger.info('building engine from:{}'.format(model_file))
         logger.info('explict batch dim:{}'.format(explicit_batch_dim))
@@ -176,8 +197,8 @@ class TensorrtBuilder:
         network = builder.create_network(network_flag)
         # parse network
         if model_type == '.pb':
-            input_node_names = TensorrtBuilder.item_to_list(input_node_names)
-            output_node_names = TensorrtBuilder.item_to_list(output_node_names)
+            input_node_names = TensorrtBuilder._item_to_list(input_node_names)
+            output_node_names = TensorrtBuilder._item_to_list(output_node_names)
             network = TensorrtBuilder._pb_uff_parser(model_file, network, input_node_names, input_node_shapes,
                                                      output_node_names)
         else:
@@ -194,7 +215,7 @@ class TensorrtBuilder:
                                                      mix_precision, calib)
         if built_engine:
             logger.info('engine built!')
-            TensorrtBuilder.save_engine(built_engine, name)
+            TensorrtBuilder._save_engine(built_engine, name)
             return built_engine
         else:
             logger.error('fail to build engine!')
@@ -228,7 +249,7 @@ class InferenceWithTensorRT:
             self.trt_engine = TensorrtBuilder.build_engine_from_pb_or_onnx(self.model_dir, **self.kwargs)
         else:
             print('loading built engine:{}...'.format(engine_file))
-            self.trt_engine = TensorrtBuilder.load_engine(self.trt_runtime, engine_file)
+            self.trt_engine = TensorrtBuilder._load_engine(self.trt_runtime, engine_file)
 
     def _context_init(self):
         volume = trt.volume(self.trt_engine.get_binding_shape(0)) * self.trt_engine.max_batch_size
