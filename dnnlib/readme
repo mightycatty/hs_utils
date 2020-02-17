@@ -1,0 +1,6 @@
+# dnnlib
+
+A helpful tensorflow training lib cloned from NVIDIA stylegan2, slight modification for personal usage.
+
+Modification details:
+1. tflib.Network.copy_vars_from, skip variables with same names but different shape
