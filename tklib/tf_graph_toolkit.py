@@ -1,49 +1,62 @@
 """tensorflow graph toolkit
 """
+import logging
 import os
+from collections import Counter
+from functools import wraps
 
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
-import logging
 
 logger = logging.getLogger('tf_graph_toolkit')
 logger.setLevel(logging.INFO)
 
 
+# ================================= commonuse utility ======================================
 def read_pb(graph_filepath):
-    """
-    read a pb file, return a graph def obj if success, otherwise returns None
-    :param graph_filepath:
-    :return: graph_def obj or None
-    """
+    """read a .pb and return a graph_def obj"""
     try:
         with tf.gfile.GFile(graph_filepath, 'rb') as f:
             graph_def = tf.GraphDef()
             graph_def.ParseFromString(f.read())
             return graph_def
     except Exception as e:
-        print('Pb reading error:{}').format(e)
-        return False
+        logger.error('Pb reading error:{}').format(e)
+        exit(0)
 
 
-def get_graph_def(pb_or_graph):
-    pass
+def _get_graph_def(pb_or_graph):
+    # pb
+    if (isinstance(pb_or_graph, str)):
+        assert os.path.exists(pb_or_graph), 'pb file not exist:{}'.format(pb_or_graph)
+        graph_def = read_pb(pb_or_graph)
+    elif pb_or_graph.__class__.__name__ == 'Graph':
+        graph_def = pb_or_graph.as_graph_def()
+    elif pb_or_graph.__class__.__name__ == 'GraphDef':
+        graph_def = pb_or_graph
+    else:
+        logger.error('error with getting graph_def')
+        exit(0)
+    return graph_def
 
 
-def _freeze_session(session, output_node_names, keep_var_names=None, clear_devices=True):
-    graph = session.graph
-    with graph.as_default():
-        freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
-        input_graph_def = graph.as_graph_def()
-        if clear_devices:
-            for node in input_graph_def.node:
-                node.device = ""
-        frozen_graph = tf.graph_util.convert_variables_to_constants(
-            session, input_graph_def, output_node_names, freeze_var_names)
-        return frozen_graph
+def get_graphdef_wrapper(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        graph_input = args[0]  # assume the first input of func is pb_or_graph_def
+        assert (isinstance(graph_input, str)) or (graph_input.__class__.__name__ == 'GraphDef') \
+               or (graph_input.__class__.__name__ == 'Graph'), 'invalid input'
+        graph_def = _get_graph_def(graph_input)
+        args = tuple([graph_def] + list(args[1:]))
+        result = func(*args, **kwargs)
+        return result
+
+    return wrapper
 
 
-def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
+# ================================= graph analysis ======================================
+# TODO: rewrite input_shape to fix shape
+def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None, *args, **kwargs):
     """
     cal flops of a tensorflow graph or a frozen.pb
     usage sample:
@@ -70,6 +83,98 @@ def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None):
                                 run_meta=run_meta, cmd='scope', options=opts)
 
     return flops.total_float_ops
+
+
+# TODO: TO TESTc
+@get_graphdef_wrapper
+def convert_pb_to_summary(input_path, output_dir=None, start_tensorboard=False, port=8000):
+    if not output_dir:
+        output_dir = input_path + ".summary"
+
+    logging.info("load from %s", input_path)
+    graph_def = read_pb(input_path)
+
+    logging.info("save to %s", output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    with tf.Session() as sess:
+        tf.import_graph_def(graph_def, name=os.path.basename(input_path).split('.')[0])
+        train_writer = tf.summary.FileWriter(output_dir)
+        train_writer.add_graph(sess.graph)
+        train_writer.close()
+
+    if start_tensorboard:
+        logging.info("launch tensorboard")
+        os.system("start tensorboard --logdir {} --port {}".format(output_dir, port))
+        os.system("start http://localhost:{}".format(port))
+
+
+# TODO: TO TEST
+@get_graphdef_wrapper
+def print_graph_stat(graph_def):
+    op_stat = Counter()
+    for node in graph_def.node:
+        op_stat[node.op] += 1
+
+    print("graph stat:")
+    for op, count in sorted(op_stat.items(), key=lambda x: x[0]):
+        print("\t%s = %s", op, count)
+
+
+def _auto_inputs_outputs_detect(graph_def):
+    """
+    automatically detect inputs(nodes with op='Placeholder') and outputs(nodes without output edges) given a graph_def.
+    Place note that this is not 100% safe, might yield wrong result, double check before carrying on
+    :param graph_def:
+    :return: inputs(list), outputs(list)
+    """
+    inputs = []
+    outputs = []
+    node_inputs = []
+    # inputs detection
+    for node in graph_def.node:
+        node_inputs += node.input
+        if node.op == 'Placeholder':
+            inputs.append(node.name + ':0')
+    # outputs detection
+    node_inputs = list(set(node_inputs))
+    for node in graph_def.node:
+        if node.name not in node_inputs:
+            if node.input:
+                outputs.append(node.name + ':0')
+    return inputs, outputs
+
+
+# TODO: use model analyse from tensorflow official instead
+def count_weights():
+    import tensorflow as tf
+    total_parameters = 0
+    for variable in tf.trainable_variables():
+        # shape is an array of tf.Dimension
+        shape = variable.get_shape()
+        # print(shape)
+        # print(len(shape))
+        variable_parameters = 1
+        for dim in shape:
+            # print(dim)
+            variable_parameters *= dim.value
+        # print(variable_parameters)
+        total_parameters += variable_parameters
+    # print(total_parameters)
+    return total_parameters
+
+
+# ================================= graph post-processing and optimization ======================================
+def _freeze_session(session, output_node_names, keep_var_names=None, clear_devices=True):
+    graph = session.graph
+    with graph.as_default():
+        freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
+        input_graph_def = graph.as_graph_def()
+        if clear_devices:
+            for node in input_graph_def.node:
+                node.device = ""
+        frozen_graph = tf.graph_util.convert_variables_to_constants(
+            session, input_graph_def, output_node_names, freeze_var_names)
+        return frozen_graph
 
 
 def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, as_text=False,
@@ -103,7 +208,7 @@ def freeze_sess_to_constant_pb(sess, export_name=None, output_node_names=None, a
 
     try:
         if output_node_names is None:
-            _, output_node_names = automatic_inputs_outputs_detect(sess.graph.as_graph_def())
+            _, output_node_names = _auto_inputs_outputs_detect(sess.graph.as_graph_def())
         output_node_names = [output_node_names] if not isinstance(output_node_names, list) else output_node_names
         output_node_names = [item.strip(':0') for item in output_node_names]
         frozen_graph = _freeze_session(sess)
@@ -137,24 +242,7 @@ def clean_graph_for_inference(graph_or_graph_def, input_node_names, output_node_
     return graph_def
 
 
-def output_pb_to_tensorboard(pb_dir, log_dir):
-    """
-     RUN:
-        tensorboard --logdir=log_dir --host=0.0.0.0
-    at the completeness of this function
-    :param pb_dir:
-    :param log_dir:
-    :return: None
-    """
-    with tf.Session() as sess:
-        with tf.gfile.FastGFile(pb_dir, 'rb') as f:
-            graph_def = tf.GraphDef()
-            graph_def.ParseFromString(f.read())
-            graph = tf.import_graph_def(graph_def)
-        train_writer = tf.summary.FileWriter(log_dir)
-        train_writer.add_graph(sess.graph)
-
-
+@get_graphdef_wrapper
 def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=None, transforms=None):
     """
     optimize graph for inference
@@ -195,7 +283,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=No
         else:
             graph_def = frozen_pb_or_graph_def
         if (input_names is None) and (output_names is None):
-            input_names, output_names = automatic_inputs_outputs_detect(graph_def)
+            input_names, output_names = _auto_inputs_outputs_detect(graph_def)
         optimized_graph_def = TransformGraph(graph_def,
                                              input_names,
                                              output_names,
@@ -205,30 +293,6 @@ def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=No
         print('graph optimization error:{}'.format(e))
         print('maybe fix the shape of your input_tensor and try again')
         return False
-
-
-def automatic_inputs_outputs_detect(graph_def):
-    """
-    automatically detect inputs(nodes with op='Placeholder') and outputs(nodes without output edges) given a graph_def.
-    Place note that this is not 100% safe, might yield wrong result, double check before carrying on
-    :param graph_def:
-    :return: inputs(list), outputs(list)
-    """
-    inputs = []
-    outputs = []
-    node_inputs = []
-    # inputs detection
-    for node in graph_def.node:
-        node_inputs += node.input
-        if node.op == 'Placeholder':
-            inputs.append(node.name + ':0')
-    # outputs detection
-    node_inputs = list(set(node_inputs))
-    for node in graph_def.node:
-        if node.name not in node_inputs:
-            if node.input:
-                outputs.append(node.name + ':0')
-    return inputs, outputs
 
 
 # TODO: BUG, AVOID TO USE, use freeze_kears_model_to_pb_from_model_fn() instead
@@ -330,8 +394,9 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
         return frozen_graph
 
 
-# TODO
-def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset='9', tf_graph_optimization=True):
+# TODO: to test
+@get_graphdef_wrapper
+def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimization=True, input_shape=None, name=None):
     try:
         from tf2onnx.tfonnx import process_tf_graph, tf_optimize
         from tf2onnx import constants, loader, logging, utils, optimizer
@@ -340,36 +405,42 @@ def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset='9', tf_graph_optimi
         exit(0)
 
     graph_def = frozen_pb_or_graph_def
-    inputs, outputs = automatic_inputs_outputs_detect(graph_def)
+    if isinstance(frozen_pb_or_graph_def, str):
+        model_path = frozen_pb_or_graph_def
+        output_dir = model_path.replace('.pb', '.onnx')
+    else:
+        model_path = 'graphdef_buffer'
+        assert name, 'name should be give to export an .onnx when converting from a graphdef buffer'
+        output_dir = '{}.onnx'.format(name)
+    inputs, outputs = _auto_inputs_outputs_detect(graph_def)
+    shape_override = {}
+    if input_shape:
+        assert isinstance(input_shape, list), 'input_shape item need to be list, each for dims of a input tensor'
+        for idx, item in enumerate(input_shape):
+            shape_override[inputs[idx]] = item
+            # graph optimizatin with tf_graph_transform
     if tf_graph_optimization:
         graph_def = graph_optimization(graph_def)
-
     with tf.Graph().as_default() as tf_graph:
         tf.import_graph_def(graph_def, name='')
     with tf.Session(graph=tf_graph):
         g = process_tf_graph(tf_graph,
                              continue_on_error=False,
-                             target=args.target,
+                             target='',
                              opset=opset,
-                             custom_op_handlers=custom_ops,
-                             extra_opset=extra_opset,
-                             shape_override=args.shape_override,
+                             custom_op_handlers={},
+                             extra_opset=[],
+                             shape_override=shape_override,
                              input_names=inputs,
                              output_names=outputs,
-                             inputs_as_nchw=False)
-
+                             inputs_as_nchw=None)
+    # graph optimization with onnx optimizer
     onnx_graph = optimizer.optimize_graph(g)
     model_proto = onnx_graph.make_model("converted from {}".format(model_path))
 
     # write onnx graph
     logger.info("")
     logger.info("Successfully converted TensorFlow model %s to ONNX", model_path)
-    if args.output:
-        utils.save_protobuf(args.output, model_proto)
-        logger.info("ONNX model is saved at %s", args.output)
-    else:
-        logger.info("To export ONNX model to file, please run with `--output` option")
-
-
-if __name__ == '__main__':
-    a = 1
+    outputs = model_path.replace('.pb', '.onnx')
+    utils.save_protobuf(output_dir, model_proto)
+    logger.info("ONNX model is saved at %s", output_dir)

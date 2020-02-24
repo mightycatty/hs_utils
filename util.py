@@ -113,6 +113,28 @@ def disable_gpu():
     os.environ["CUDA_VISIBLE_DEVICES"] = '-1'
 
 
+def select_n_gpus(num=1, max_load=0.1, max_mem=0.1):
+    import os
+    try:
+        import GPUtil as gputil
+    except:
+        print('import GPUtil error, "pip install gputil" and try again')
+    available_gpu_ids = gputil.getAvailable(order='first', limit=num, maxLoad=max_load, maxMemory=max_mem, includeNan=False,
+                                            excludeID=[], excludeUUID=[])
+    if len(available_gpu_ids) < num:
+        print('not enough gpus found!')
+        exit(0)
+    else:
+        if num == 0:
+            gpu_str = '-1'
+        else:
+            gpu_str = ''
+            for i in range(num):
+                gpu_str += available_gpu_ids[i]
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_str
+
+
+
 # ===============================================================================================================
 
 def flat_list(list_input):
@@ -124,4 +146,3 @@ def flat_list(list_input):
         else:
             list_flatten += [item]
     return list_flatten
-
