@@ -1,10 +1,13 @@
-"""
-tensorflow-graph toolkit
+"""tensorflow graph toolkit
 """
 import os
 
 import tensorflow as tf
 from tensorflow.python.keras import backend as K
+import logging
+
+logger = logging.getLogger('tf_graph_toolkit')
+logger.setLevel(logging.INFO)
 
 
 def read_pb(graph_filepath):
@@ -21,6 +24,10 @@ def read_pb(graph_filepath):
     except Exception as e:
         print('Pb reading error:{}').format(e)
         return False
+
+
+def get_graph_def(pb_or_graph):
+    pass
 
 
 def _freeze_session(session, output_node_names, keep_var_names=None, clear_devices=True):
@@ -195,7 +202,7 @@ def graph_optimization(frozen_pb_or_graph_def, input_names=None, output_names=No
                                              transforms)
         return optimized_graph_def
     except Exception as e:
-        print ('graph optimization error:{}'.format(e))
+        print('graph optimization error:{}'.format(e))
         print('maybe fix the shape of your input_tensor and try again')
         return False
 
@@ -261,14 +268,15 @@ def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimiz
             if verbose:
                 print('frozen pb saved to:{}'.format(os.path.join(export_dir, export_name)))
     except Exception as e:
-        print (e)
+        print(e)
     finally:
-        K.set_session(sess_or) # rollback keras session
+        K.set_session(sess_or)  # rollback keras session
     return
 
 
 # TODO: code stylish
-def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name, graph_optimize=True,
+def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name,
+                                           graph_optimize=True,
                                            export_tf_lite=False):
     """
     由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
@@ -302,7 +310,7 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
     assert os.path.exists(weight_path), 'weights not found'
     K.clear_session()
     K.set_learning_phase(0)  # all new operations will be in test mode from now on,
-                            # which is crucial for converting to tflite and a frozen pb
+    # which is crucial for converting to tflite and a frozen pb
     model = _model_wrapper(model_fn, input_shape, export_name)
     model.load_weights(weight_path, by_name=True)
     with K.get_session() as sess:
@@ -313,22 +321,55 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
             tf.io.write_graph(frozen_graph, export_path, export_name + '_opt.pb', as_text=False)
         # convert to tflite
         if export_tf_lite:
-            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs, model.outputs)
+            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs,
+                                                             model.outputs)
             tflite_model = converter.convert()
-            save_dir = os.path.join(export_path, export_name+'.tflite')
+            save_dir = os.path.join(export_path, export_name + '.tflite')
             with open(save_dir, 'wb') as f:
                 f.write(tflite_model)
         return frozen_graph
 
 
 # TODO
-def constant_folding(pb_or_graphdef=None):
-    """
-    tf graph transform does incomplete constant folding
-    :param pb_or_graphdef:
-    :return:
-    """
-    pb_dir = 'F:\heshuai\proj\stylegan\deployment\encoder_fix.pb'
-    graph_def = read_pb(pb_dir)
-    nodes = graph_def.node
-    return graph_def
+def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset='9', tf_graph_optimization=True):
+    try:
+        from tf2onnx.tfonnx import process_tf_graph, tf_optimize
+        from tf2onnx import constants, loader, logging, utils, optimizer
+    except Exception as e:
+        logger.error('import tf2onnx error, "pip install tf2onnx"')
+        exit(0)
+
+    graph_def = frozen_pb_or_graph_def
+    inputs, outputs = automatic_inputs_outputs_detect(graph_def)
+    if tf_graph_optimization:
+        graph_def = graph_optimization(graph_def)
+
+    with tf.Graph().as_default() as tf_graph:
+        tf.import_graph_def(graph_def, name='')
+    with tf.Session(graph=tf_graph):
+        g = process_tf_graph(tf_graph,
+                             continue_on_error=False,
+                             target=args.target,
+                             opset=opset,
+                             custom_op_handlers=custom_ops,
+                             extra_opset=extra_opset,
+                             shape_override=args.shape_override,
+                             input_names=inputs,
+                             output_names=outputs,
+                             inputs_as_nchw=False)
+
+    onnx_graph = optimizer.optimize_graph(g)
+    model_proto = onnx_graph.make_model("converted from {}".format(model_path))
+
+    # write onnx graph
+    logger.info("")
+    logger.info("Successfully converted TensorFlow model %s to ONNX", model_path)
+    if args.output:
+        utils.save_protobuf(args.output, model_proto)
+        logger.info("ONNX model is saved at %s", args.output)
+    else:
+        logger.info("To export ONNX model to file, please run with `--output` option")
+
+
+if __name__ == '__main__':
+    a = 1

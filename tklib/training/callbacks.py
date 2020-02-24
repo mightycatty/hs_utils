@@ -12,7 +12,7 @@ from tensorflow.python.keras import backend as K
 from tensorflow.python.keras.callbacks import Callback
 from tensorflow.python.summary import summary as tf_summary
 
-from .post_training_utils import freeze_keras_model_to_pb
+from tklib.post_training_utils import freeze_keras_model_to_pb
 
 
 class IntermediateOutputVisualization(Callback):
