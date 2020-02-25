@@ -13,6 +13,18 @@ logger.setLevel(logging.INFO)
 
 
 # ================================= commonuse utility ======================================
+def _graph_pb_graphdef(input_obj):
+    """get type from an input-obj, pb or graph or graphdef, otherwise none"""
+    valid_format = ['pb', 'graph', 'graphdef']
+    if os.path.isfile(input_obj):
+        return 'pb'
+    if isinstance(input_obj, object):
+        type = input_obj.__class__.__name__
+        if type.lower() in valid_format:
+            return type
+    return None
+
+
 def read_pb(graph_filepath):
     """read a .pb and return a graph_def obj"""
     try:
@@ -26,16 +38,18 @@ def read_pb(graph_filepath):
 
 
 def _get_graph_def(pb_or_graph):
-    # pb
-    if (isinstance(pb_or_graph, str)):
+    """return a graphdef obj with a .pb file or graph obj input"""
+    type = _graph_pb_graphdef(pb_or_graph)
+    assert type, 'invalid input for getting a graph def'
+    if type == 'pb':
         assert os.path.exists(pb_or_graph), 'pb file not exist:{}'.format(pb_or_graph)
         graph_def = read_pb(pb_or_graph)
-    elif pb_or_graph.__class__.__name__ == 'Graph':
+    elif type == 'Graph':
         graph_def = pb_or_graph.as_graph_def()
-    elif pb_or_graph.__class__.__name__ == 'GraphDef':
+    elif type == 'GraphDef':
         graph_def = pb_or_graph
     else:
-        logger.error('error with getting graph_def')
+        logger.error('unknown error when getting graph_def')
         exit(0)
     return graph_def
 
@@ -44,8 +58,6 @@ def get_graphdef_wrapper(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         graph_input = args[0]  # assume the first input of func is pb_or_graph_def
-        assert (isinstance(graph_input, str)) or (graph_input.__class__.__name__ == 'GraphDef') \
-               or (graph_input.__class__.__name__ == 'Graph'), 'invalid input'
         graph_def = _get_graph_def(graph_input)
         args = tuple([graph_def] + list(args[1:]))
         result = func(*args, **kwargs)
@@ -54,8 +66,34 @@ def get_graphdef_wrapper(func):
     return wrapper
 
 
+def get_node_by_name_in_graphdef(graph_def, node_name):
+    """get node by name in graphdef, return a nodedef if exist otherwise None"""
+    # inputs detection
+    for node in graph_def.node:
+        if node.name == node_name:
+            return node
+    return None
+
+
+def get_node_by_optype_in_graphdef(graph_def, optype_list):
+    """get nodes by op type, return a list of nodedef if detected"""
+    node_list = []
+    optype_list = [optype_list] if isinstance(optype_list, str) else optype_list
+    # inputs detection
+    for node in graph_def.node:
+        if node.op in optype_list:
+            node_list.append(node_list)
+    return node_list
+
+
+# TODO
+def get_node_shape(graph_def, op_name):
+    node = get_node_by_name_in_graphdef(graph_def, op_name)
+    assert node, 'node with name:{} not found'.format(op_name)
+
+
 # ================================= graph analysis ======================================
-# TODO: rewrite input_shape to fix shape
+# TODO: rewrite input_shape to fix shape internally
 def calculate_flogs(graph_or_pb, input_tensor_name=None, input_shape=None, *args, **kwargs):
     """
     cal flops of a tensorflow graph or a frozen.pb
@@ -125,7 +163,7 @@ def _auto_inputs_outputs_detect(graph_def):
     automatically detect inputs(nodes with op='Placeholder') and outputs(nodes without output edges) given a graph_def.
     Place note that this is not 100% safe, might yield wrong result, double check before carrying on
     :param graph_def:
-    :return: inputs(list), outputs(list)
+    :return: inputs(list), outputs(list), eg. ['input_0:0', 'input_1:0], ['output:0']
     """
     inputs = []
     outputs = []
