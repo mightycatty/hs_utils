@@ -16,9 +16,9 @@ logger.setLevel(logging.INFO)
 def _graph_pb_graphdef(input_obj):
     """get type from an input-obj, pb or graph or graphdef, otherwise none"""
     valid_format = ['pb', 'graph', 'graphdef']
-    if os.path.isfile(input_obj):
+    if isinstance(input_obj, str):
         return 'pb'
-    if isinstance(input_obj, object):
+    elif isinstance(input_obj, object):
         type = input_obj.__class__.__name__
         if type.lower() in valid_format:
             return type
