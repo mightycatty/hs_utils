@@ -433,7 +433,6 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
 
 
 # TODO: to test
-@get_graphdef_wrapper
 def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimization=True, input_shape=None, name=None):
     try:
         from tf2onnx.tfonnx import process_tf_graph, tf_optimize
@@ -442,14 +441,15 @@ def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimiza
         logger.error('import tf2onnx error, "pip install tf2onnx"')
         exit(0)
 
-    graph_def = frozen_pb_or_graph_def
     if isinstance(frozen_pb_or_graph_def, str):
         model_path = frozen_pb_or_graph_def
         output_dir = model_path.replace('.pb', '.onnx')
+        graph_def = read_pb(frozen_pb_or_graph_def)
     else:
         model_path = 'graphdef_buffer'
         assert name, 'name should be give to export an .onnx when converting from a graphdef buffer'
         output_dir = '{}.onnx'.format(name)
+        graph_def = frozen_pb_or_graph_def
     inputs, outputs = _auto_inputs_outputs_detect(graph_def)
     shape_override = {}
     if input_shape:
@@ -479,6 +479,5 @@ def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimiza
     # write onnx graph
     logger.info("")
     logger.info("Successfully converted TensorFlow model %s to ONNX", model_path)
-    outputs = model_path.replace('.pb', '.onnx')
     utils.save_protobuf(output_dir, model_proto)
     logger.info("ONNX model is saved at %s", output_dir)

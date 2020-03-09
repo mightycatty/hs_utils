@@ -9,7 +9,21 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="root@106.14.224.71:58124">
+      <paths name="hcv100">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@10.68.160.80:6065">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="root@106.14.224.71:35608">
         <serverdata>
           <mappings>
             <mapping local="$PROJECT_DIR$" web="/" />
