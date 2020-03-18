@@ -431,7 +431,61 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
                 f.write(tflite_model)
         return frozen_graph
 
+def freeze_keras_model_to_pb_from_model_fn_test(model_fn, weight_path, input_shape, export_path, export_name,
+                                           graph_optimize=True,
+                                           export_tf_lite=False):
+    """
+    由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
+    注意：该方法导出的pb会多一个import前缀，如keras model下op名字为input, 则pb中为import/input:0
+    :param model_with_weights:
+    :param export_path:
+    :param export_name:
+    :return:
+    """
 
+    def _model_wrapper(model_fn, input_shape, model_name):
+        input_tensor = []
+        for idx, item in enumerate(input_shape):
+            input_tensor.append(tf.keras.layers.Input(item, name='input_{}'.format(idx)))
+        segmentation_output = model_fn(*input_tensor)
+        model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name)
+        return model
+
+    def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
+        graph = session.graph
+        with graph.as_default():
+            freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
+            output_names = output_names or []
+            output_names += [v.op.name for v in tf.global_variables()]
+            input_graph_def = graph.as_graph_def()
+            if clear_devices:
+                for node in input_graph_def.node:
+                    node.device = ""
+            frozen_graph = tf.graph_util.convert_variables_to_constants(
+                session, input_graph_def, output_names, freeze_var_names)
+            return frozen_graph
+
+    assert os.path.exists(weight_path), 'weights not found'
+    K.clear_session()
+    K.set_learning_phase(0)  # all new operations will be in test mode from now on,
+    # which is crucial for converting to tflite and a frozen pb
+    model = _model_wrapper(model_fn, input_shape, export_name)
+    model.load_weights(weight_path, by_name=True)
+    with K.get_session() as sess:
+        frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
+        tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)
+        if graph_optimize:
+            frozen_graph = graph_optimization(frozen_graph)
+            tf.io.write_graph(frozen_graph, export_path, export_name + '_opt.pb', as_text=False)
+        # convert to tflite
+        if export_tf_lite:
+            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs,
+                                                             model.outputs)
+            tflite_model = converter.convert()
+            save_dir = os.path.join(export_path, export_name + '.tflite')
+            with open(save_dir, 'wb') as f:
+                f.write(tflite_model)
+        return frozen_graph
 # TODO: to test
 def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimization=True, input_shape=None, name=None):
     try:
