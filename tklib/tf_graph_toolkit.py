@@ -431,9 +431,10 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
                 f.write(tflite_model)
         return frozen_graph
 
+
 def freeze_keras_model_to_pb_from_model_fn_test(model_fn, weight_path, input_shape, export_path, export_name,
-                                           graph_optimize=True,
-                                           export_tf_lite=False):
+                                                graph_optimize=True,
+                                                export_tf_lite=False):
     """
     由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
     注意：该方法导出的pb会多一个import前缀，如keras model下op名字为input, 则pb中为import/input:0
@@ -486,6 +487,8 @@ def freeze_keras_model_to_pb_from_model_fn_test(model_fn, weight_path, input_sha
             with open(save_dir, 'wb') as f:
                 f.write(tflite_model)
         return frozen_graph
+
+
 # TODO: to test
 def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimization=True, input_shape=None, name=None):
     try:
