@@ -134,7 +134,21 @@ def select_n_gpus(num=1, max_load=0.1, max_mem=0.1):
         os.environ["CUDA_VISIBLE_DEVICES"] = gpu_str
 
 
+class EasyDict(dict):
+    from typing import Any
+    """Convenience class that behaves like a dict but allows access with the attribute syntax."""
 
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
+
+    def __delattr__(self, name: str) -> None:
+        del self[name]
 # ===============================================================================================================
 
 def flat_list(list_input):
