@@ -87,7 +87,8 @@ class InferenceWithPb:
     #     return graph_def
 
     def _construct_graph(self, pb_dir, extra_output_nodes):
-        assert isinstance(extra_output_nodes, list), 'extra_output_nodes should be in list format'
+        if extra_output_nodes:
+            assert isinstance(extra_output_nodes, list), 'extra_output_nodes should be in list format'
         self.graph = tf.Graph()
         with self.graph.as_default():
             graph_def = InferenceWithPb._read_pb(pb_dir)
