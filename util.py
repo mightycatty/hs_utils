@@ -302,3 +302,10 @@ def get_file_recursively(folder_dir):
             if os.path.isfile(sub_dir):
                 file_list.append(sub_dir)
     return file_list
+
+
+def read_textlines(txt_file):
+    with open(txt_file) as f:
+        provided_id_list = f.readlines()
+    val_list = [item.strip('\n') for item in provided_id_list]
+    return val_list
