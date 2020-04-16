@@ -538,3 +538,37 @@ def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimiza
     logger.info("Successfully converted TensorFlow model %s to ONNX", model_path)
     utils.save_protobuf(output_dir, model_proto)
     logger.info("ONNX model is saved at %s", output_dir)
+
+
+# TODO: bugs, no .mnn saved after this scip
+def convert_pb_onnx_to_mnn(frozen_pb_dir_or_onnx, fp16=False):
+    """
+     Usage:
+      1. pip install -U MNN
+      2. call this fn
+    :param frozen_pb_dir_or_onnx:
+    :return:
+    """
+    import subprocess
+    try:
+        from MNNTools.mnnconvert import main as convert_main
+    except ImportError:
+        logger.error('pip install -U MNN and try again')
+    assert isinstance(frozen_pb_dir_or_onnx, str) and os.path.exists(frozen_pb_dir_or_onnx), \
+        'invalid file or not exit/{}'.format(frozen_pb_dir_or_onnx)
+    # framework index
+    valid_format = {'PB':'TF', 'ONNX':'ONNX'} # mnn official framework index
+    or_name = os.path.splitext(frozen_pb_dir_or_onnx)[0]
+    file_format = os.path.splitext(frozen_pb_dir_or_onnx)[-1][1:]
+    assert file_format.upper() in valid_format.keys(), 'invalid model format, pb/onnx are supported'
+    framework_type = valid_format[file_format.upper()]
+    output_name = or_name + '.mnn'
+    output_name = os.path.join(r'F:\heshuai\proj\matting_tf\model\t_net', output_name)
+    frozen_pb_dir_or_onnx = os.path.join(r'F:\heshuai\proj\matting_tf\model\t_net', frozen_pb_dir_or_onnx)
+    cmd_str = 'python -m MNNTools.mnnconvert -f {} --modelFile {} --MNNModel {} --bizCode biz'.format(framework_type, frozen_pb_dir_or_onnx, output_name)
+    # Tools.mnnconvert(output_name, frozen_pb_dir_or_onnx, framework_type, 'MNN', False, 'NA.mnn')
+    subprocess.run(cmd_str, shell=True)
+    return True
+
+
+
