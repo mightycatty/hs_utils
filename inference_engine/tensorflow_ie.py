@@ -1,6 +1,6 @@
-import tensorflow as tf
-from tensorflow import gfile
 import os
+import tensorflow as tf
+from tensorflow._api.v1 import gfile
 
 
 class InferenceWithPb:
@@ -17,7 +17,7 @@ class InferenceWithPb:
                  output_nodes=None,
                  pre_processing_fn=None,
                  post_processing_fn=None,
-                 extra_output_nodes=None, # [extra output_nodes:0]
+                 extra_output_nodes=None,  # [extra output_nodes:0]
                  **kwargs):
         # attr
         assert os.path.exists(model_file), 'model_file not exist!'
@@ -116,25 +116,15 @@ class InferenceWithPb:
         # config.gpu_options.per_process_gpu_memory_fraction = 0.5
         self.sess = tf.Session(config=config, graph=self.graph)
 
-    def predict(self, input_data,
-                output_nodes=None,
-                **kwargs):
-        output_nodes_list = []
-        if output_nodes:
-            if isinstance(output_nodes, str):
-                output_nodes = [output_nodes]
-            assert isinstance(output_nodes, list), 'invalid nodes input:str or list'
-            output_nodes_list += output_nodes
-        else:
-            output_nodes_list += self.output
-
+    def predict(self, input_data, **kwargs):
         if not isinstance(input_data, list):
             input_data = [input_data]
         if self._pre_processing_fn:
             input_data = [self._pre_processing_fn(item) for item in input_data]
 
         feed_dict = {key: value for key, value in zip(self.input, input_data)}
-        result = self.sess.run(output_nodes_list, feed_dict=feed_dict)
+        result = self.sess.run(self.output, feed_dict=feed_dict)
+
         if self._post_processing_fn:
             result = [self._post_processing_fn(item) for item in result]
         if len(result) == 1:
