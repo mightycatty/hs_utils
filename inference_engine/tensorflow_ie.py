@@ -17,20 +17,18 @@ class InferenceWithPb:
                  output_nodes=None,
                  pre_processing_fn=None,
                  post_processing_fn=None,
-                 tf_trt=False,
+                 extra_output_nodes=None, # [extra output_nodes:0]
                  **kwargs):
         # attr
         assert os.path.exists(model_file), 'model_file not exist!'
         self.input_name = input_nodes  # list
         self.output_name = output_nodes  # list
-        self.input = []  # input tensor
+        self.input = []  # input_node:0
         self.output = []
 
-        self.tf_trt = tf_trt
-        self.pb_dir = model_file
-        self.pre_processing_fn = pre_processing_fn  # lambda x: fn(x, **kwargs)
-        self.post_processing_fn = post_processing_fn
-        self._construct_graph()
+        self._pre_processing_fn = pre_processing_fn  # lambda x: fn(x, **kwargs)
+        self._post_processing_fn = post_processing_fn
+        self._construct_graph(model_file, extra_output_nodes)
         self._init_session()
 
     def __enter__(self):
@@ -88,10 +86,12 @@ class InferenceWithPb:
     #         max_workspace_size_bytes = 1 << 30)
     #     return graph_def
 
-    def _construct_graph(self):
+    def _construct_graph(self, pb_dir, extra_output_nodes):
+        if extra_output_nodes:
+            assert isinstance(extra_output_nodes, list), 'extra_output_nodes should be in list format'
         self.graph = tf.Graph()
         with self.graph.as_default():
-            graph_def = InferenceWithPb._read_pb(self.pb_dir)
+            graph_def = InferenceWithPb._read_pb(pb_dir)
             au_inputs, au_outputs = InferenceWithPb._automatic_inputs_outputs_detect(graph_def)
             tf.import_graph_def(graph_def, name='')
             graph = tf.get_default_graph()
@@ -106,6 +106,8 @@ class InferenceWithPb:
             self.input = [graph.get_tensor_by_name(item) for item in self.input_name]
             if self.output_name:
                 self.output = [graph.get_tensor_by_name(item) for item in self.output_name]
+            if extra_output_nodes:
+                self.output += extra_output_nodes
 
     def _init_session(self):
         # without below configuration, raise error on tf_gpu_1.14
@@ -128,13 +130,13 @@ class InferenceWithPb:
 
         if not isinstance(input_data, list):
             input_data = [input_data]
-        if self.pre_processing_fn:
-            input_data = [self.pre_processing_fn(item) for item in input_data]
+        if self._pre_processing_fn:
+            input_data = [self._pre_processing_fn(item) for item in input_data]
 
         feed_dict = {key: value for key, value in zip(self.input, input_data)}
         result = self.sess.run(output_nodes_list, feed_dict=feed_dict)
-        if self.post_processing_fn:
-            result = [self.post_processing_fn(item) for item in result]
+        if self._post_processing_fn:
+            result = [self._post_processing_fn(item) for item in result]
         if len(result) == 1:
             result = result[0]
         return result
