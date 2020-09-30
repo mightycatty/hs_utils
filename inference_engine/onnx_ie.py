@@ -29,15 +29,18 @@ class InferenceWithOnnx():
         self.sess = rt.InferenceSession(self.model_dir)
         self._get_inputs()
 
-    def predict(self, input_data,
-                **kwargs):
+    def predict(self, input_data, output_nodes=None, *args, **kwargs):
         if not isinstance(input_data, list):
             input_data = [input_data]
+        if self.pre_processing_fn:
+            input_data = [self.pre_processing_fn(item) for item in input_data]
         assert len(input_data) == len(self.input_names), 'num of input_data:{} not matches with what of model\'s ' \
                                                          'input:{}'.format(len(input_data), len(self.input_names))
         feed_dict = {}
         for key, value in zip(self.input_names, input_data):
             feed_dict[key] = value
         result = self.sess.run(self.output_names, input_feed=feed_dict)
+        if self.post_processing_fn:
+            result = [self.post_processing_fn(item) for item in result]
         result = result[0] if len(self.output_names) == 1 else result
         return result

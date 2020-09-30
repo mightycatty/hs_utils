@@ -9,7 +9,10 @@ class MyLog(object):
     requirement: telebot
         https://github.com/eternnoir/pyTelegramBotAPI
     """
-    def __init__(self, log_name=None, log_dir='.', logging_level=logging.DEBUG, clean_format=True, clear_file=False):
+    def __init__(self, log_name=None, log_dir='.',
+                 logging_level=logging.DEBUG,
+                 clean_format=True,
+                 clear_file=False):
         # create logger
         if log_name is None:
             log_name = __name__
@@ -26,11 +29,12 @@ class MyLog(object):
         self.logger.addHandler(ch)
         if clear_file:
             self.clear_logfile()
-        self.tb = None
+        self.telegram_bot_init()
 
     def telegram_bot_init(self, token=None):
         # initialize telegram bot
         _default_token = '664787432:AAFkb3Q_mMXlid29fwWibIUOeaNWvtHSHpg'
+        self._default_chat_id = '786535272'
         self.token = token if token else _default_token
         self.tb = telebot.TeleBot(self.token)
 
@@ -51,7 +55,7 @@ class MyLog(object):
             pass
         return
 
-    def fire_message_via_bot(self, message, chat_id=None, token=None):
+    def fire_message_via_bot(self, message, chat_id=None):
         """
         向指定的chat id发送文字信息
         注意：由于采用markdown解析，字符串中不能出现markdown的语义符，否则报bad request错误
@@ -59,15 +63,15 @@ class MyLog(object):
         :param chat_id:
         :return:
         """
-        chat_id = '786535272' if chat_id is None else chat_id
-        if self.tb is None:
-            if (token is None) or (chat_id is None):
-                self.logger.warning('token or chat_id is required!')
-            else:
-                self.token = token
-                self.chat_id = chat_id
-                self.tb = telebot.TeleBot(self.token)
-        else:
-            self.tb.send_message(chat_id, message, parse_mode='Markdown')
+        chat_id = self._default_chat_id if chat_id is None else chat_id
+        self.tb.send_message(chat_id, message, parse_mode='Markdown')
+
+    def send_image_via_bot(self, image_path, chat_id=None):
+        chat_id = self._default_chat_id if chat_id is None else chat_id
+        with open(image_path, 'rb') as f:
+            self.tb.send_photo(chat_id, f)
 
 
+if __name__ == '__main__':
+    my_logger = MyLog()
+    my_logger.send_image_via_bot(r'F:\heshuai\data\segmentation\ready_for_train\val\test\image\0_youtube178_342.png')
