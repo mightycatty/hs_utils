@@ -377,9 +377,18 @@ def freeze_keras_model_to_pb(tk_model, export_dir='.', export_name=None, optimiz
 
 
 # TODO: code stylish
-def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, export_path, export_name,
-                                           graph_optimize=True,
-                                           export_tf_lite=False):
+def export_keras_model(model_fn,
+                       weight_path,
+                       input_shape,
+                       export_path,
+                       export_name,
+                       graph_optimize=True,
+                       export_tf_lite=False,
+                       export_onnx=False,
+                       onnx_opset=9,
+                       export_mnn=False,
+                       batch_size=None,
+                       debug=False):
     """
     由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
     注意：该方法导出的pb会多一个import前缀，如keras model下op名字为input, 则pb中为import/input:0
@@ -390,7 +399,7 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
     """
 
     def _model_wrapper(model_fn, input_shape, model_name):
-        input_tensor = tf.keras.layers.Input(input_shape, name='input')
+        input_tensor = tf.keras.layers.Input(input_shape, name='input', batch_size=batch_size)
         segmentation_output = model_fn(input_tensor)
         model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name)
         return model
@@ -409,12 +418,14 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
                 session, input_graph_def, output_names, freeze_var_names)
             return frozen_graph
 
-    assert os.path.exists(weight_path), 'weights not found'
+    if not debug:
+        assert os.path.exists(weight_path), 'weights not found'
     K.clear_session()
     K.set_learning_phase(0)  # all new operations will be in test mode from now on,
     # which is crucial for converting to tflite and a frozen pb
     model = _model_wrapper(model_fn, input_shape, export_name)
-    model.load_weights(weight_path, by_name=True)
+    if not debug:
+        model.load_weights(weight_path, by_name=True)
     with K.get_session() as sess:
         frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
         tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)
@@ -429,72 +440,20 @@ def freeze_keras_model_to_pb_from_model_fn(model_fn, weight_path, input_shape, e
             save_dir = os.path.join(export_path, export_name + '.tflite')
             with open(save_dir, 'wb') as f:
                 f.write(tflite_model)
-        return frozen_graph
-
-
-def freeze_keras_model_to_pb_from_model_fn_test(model_fn, weight_path, input_shape, export_path, export_name,
-                                                graph_optimize=True,
-                                                export_tf_lite=False):
-    """
-    由于tf keras的底层机制问题，最好不要用参数传递带参数的keras model对象，带参数的模型对象会有一个session，容易导致转pb错误
-    注意：该方法导出的pb会多一个import前缀，如keras model下op名字为input, 则pb中为import/input:0
-    :param model_with_weights:
-    :param export_path:
-    :param export_name:
-    :return:
-    """
-
-    def _model_wrapper(model_fn, input_shape, model_name):
-        input_tensor = []
-        for idx, item in enumerate(input_shape):
-            input_tensor.append(tf.keras.layers.Input(item, name='input_{}'.format(idx)))
-        segmentation_output = model_fn(*input_tensor)
-        model = tf.keras.models.Model(input_tensor, segmentation_output, name=model_name)
-        return model
-
-    def _freeze_session(session, keep_var_names=None, output_names=None, clear_devices=True):
-        graph = session.graph
-        with graph.as_default():
-            freeze_var_names = list(set(v.op.name for v in tf.global_variables()).difference(keep_var_names or []))
-            output_names = output_names or []
-            output_names += [v.op.name for v in tf.global_variables()]
-            input_graph_def = graph.as_graph_def()
-            if clear_devices:
-                for node in input_graph_def.node:
-                    node.device = ""
-            frozen_graph = tf.graph_util.convert_variables_to_constants(
-                session, input_graph_def, output_names, freeze_var_names)
-            return frozen_graph
-
-    assert os.path.exists(weight_path), 'weights not found'
-    K.clear_session()
-    K.set_learning_phase(0)  # all new operations will be in test mode from now on,
-    # which is crucial for converting to tflite and a frozen pb
-    model = _model_wrapper(model_fn, input_shape, export_name)
-    model.load_weights(weight_path, by_name=True)
-    with K.get_session() as sess:
-        frozen_graph = _freeze_session(sess, output_names=[out.op.name for out in model.outputs])
-        tf.io.write_graph(frozen_graph, export_path, export_name + '.pb', as_text=False)
-        if graph_optimize:
-            frozen_graph = graph_optimization(frozen_graph)
-            tf.io.write_graph(frozen_graph, export_path, export_name + '_opt.pb', as_text=False)
-        # convert to tflite
-        if export_tf_lite:
-            converter = tf.lite.TFLiteConverter.from_session(tf.keras.backend.get_session(), model.inputs,
-                                                             model.outputs)
-            tflite_model = converter.convert()
-            save_dir = os.path.join(export_path, export_name + '.tflite')
-            with open(save_dir, 'wb') as f:
-                f.write(tflite_model)
-        return frozen_graph
+    if export_onnx:
+        convert_frozen_pb_to_onnx(frozen_graph, opset=onnx_opset, name=export_name, tf_graph_optimization=False)
+    if export_mnn:
+        convert_pb_onnx_to_mnn(export_name+'_opt.pb')
+    return frozen_graph
 
 
 # TODO: to test
-def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimization=True, input_shape=None, name=None):
+def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=10, tf_graph_optimization=True, input_shape=None, name=None):
     try:
         from tf2onnx.tfonnx import process_tf_graph, tf_optimize
-        from tf2onnx import constants, loader, logging, utils, optimizer
+        from tf2onnx import constants, logging, utils, optimizer
     except Exception as e:
+        logger.error(e)
         logger.error('import tf2onnx error, "pip install tf2onnx"')
         exit(0)
 
@@ -541,7 +500,7 @@ def convert_frozen_pb_to_onnx(frozen_pb_or_graph_def, opset=9, tf_graph_optimiza
 
 
 # TODO: bugs, no .mnn saved after this scip
-def convert_pb_onnx_to_mnn(frozen_pb_dir_or_onnx, fp16=False):
+def convert_pb_onnx_to_mnn(frozen_pb_dir_or_onnx, fp16=True):
     """
      Usage:
       1. pip install -U MNN
@@ -549,25 +508,23 @@ def convert_pb_onnx_to_mnn(frozen_pb_dir_or_onnx, fp16=False):
     :param frozen_pb_dir_or_onnx:
     :return:
     """
-    import subprocess
     try:
-        from MNNTools.mnnconvert import main as convert_main
+        from MNN.tools.mnnconvert import Tools
     except ImportError:
         logger.error('pip install -U MNN and try again')
     assert isinstance(frozen_pb_dir_or_onnx, str) and os.path.exists(frozen_pb_dir_or_onnx), \
         'invalid file or not exit/{}'.format(frozen_pb_dir_or_onnx)
     # framework index
-    valid_format = {'PB':'TF', 'ONNX':'ONNX'} # mnn official framework index
+    TF = 0
+    ONNX = 2
+    TFLITE = 4
+    valid_format = {'PB':0, 'ONNX':2} # mnn official framework index
     or_name = os.path.splitext(frozen_pb_dir_or_onnx)[0]
     file_format = os.path.splitext(frozen_pb_dir_or_onnx)[-1][1:]
     assert file_format.upper() in valid_format.keys(), 'invalid model format, pb/onnx are supported'
     framework_type = valid_format[file_format.upper()]
     output_name = or_name + '.mnn'
-    output_name = os.path.join(r'F:\heshuai\proj\matting_tf\model\t_net', output_name)
-    frozen_pb_dir_or_onnx = os.path.join(r'F:\heshuai\proj\matting_tf\model\t_net', frozen_pb_dir_or_onnx)
-    cmd_str = 'python -m MNNTools.mnnconvert -f {} --modelFile {} --MNNModel {} --bizCode biz'.format(framework_type, frozen_pb_dir_or_onnx, output_name)
-    # Tools.mnnconvert(output_name, frozen_pb_dir_or_onnx, framework_type, 'MNN', False, 'NA.mnn')
-    subprocess.run(cmd_str, shell=True)
+    Tools.mnnconvert(output_name, frozen_pb_dir_or_onnx, framework_type, fp16, 'NA.mnn')
     return True
 
 
